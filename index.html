@@ -28,10 +28,13 @@
   *{box-sizing:border-box;}
   body{
     margin:0;
-    background:var(--paper);
+    background:
+      linear-gradient(180deg, var(--paper-2) 0%, var(--paper) 22%, var(--paper) 78%, var(--paper-2) 100%);
+    background-attachment:fixed;
     color:var(--ink);
     font-family:'Work Sans',sans-serif;
     -webkit-font-smoothing:antialiased;
+    min-height:100vh;
   }
   h1,h2,h3{font-family:'Fraunces',serif;font-weight:600;margin:0;}
   .wrap{max-width:960px;margin:0 auto;padding:28px 20px 80px;}
