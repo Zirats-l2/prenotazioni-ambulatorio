@@ -218,12 +218,19 @@ const STAFF_HOURS = {   // orario in cui segreteria/medico possono prenotare (mi
 const PATIENT_HOURS = { // orario in cui i pazienti possono prenotare
   1: [660, 780],  // Lun 11:00–13:00
   2: [900, 1080], // Mar 15:00–18:00
-  3: [930, 1080], // Mer 15:30–18:00
-  4: [630, 780],  // Gio 10:30–13:00
-  5: [630, 750],  // Ven 10:30–12:30
+  3: [915, 1080], // Mer 15:15–18:00
+  4: [615, 780],  // Gio 10:15–13:00
+  5: [615, 750],  // Ven 10:15–12:30
 };
 const PATIENT_DURATION = 30;
 const DAY_NAMES = {1:'Lunedì',2:'Martedì',3:'Mercoledì',4:'Giovedì',5:'Venerdì'};
+
+// Primi 15 minuti riservati automaticamente ogni settimana (non richiede azione manuale)
+const RECURRING_BLOCKS = {
+  3: [{start:900, duration:15, label:'Informatore farmaceutico'}], // Mer 15:00–15:15
+  4: [{start:600, duration:15, label:'Informatore farmaceutico'}], // Gio 10:00–10:15
+  5: [{start:600, duration:15, label:'Informatore farmaceutico'}], // Ven 10:00–10:15
+};
 const ADMIN_PIN = "1234"; // <-- cambia questo PIN
 
 // MODIFICA QUI: incolla qui i 3 codici ottenuti da emailjs.com per attivare le email automatiche.
@@ -304,6 +311,15 @@ async function loadDay(dateStr){
   }catch(e){ console.error('Errore caricamento prenotazioni', e); return []; }
 }
 
+function getRecurringBlocks(wd){
+  return (RECURRING_BLOCKS[wd]||[]).map(b => ({start:b.start, duration:b.duration, type:'block', name:b.label, phone:'', virtual:true}));
+}
+
+async function loadDayFull(dateStr, wd){
+  const entries = await loadDay(dateStr);
+  return entries.concat(getRecurringBlocks(wd));
+}
+
 async function insertEntry(dateStr, entry){
   try{
     await fetch(`${SUPABASE_URL}/rest/v1/bookings`, {
@@ -380,7 +396,7 @@ async function render(){
   for(const date of dates){
     const wd = date.getDay();
     const dateStr = fmtDateStr(date);
-    const entries = await loadDay(dateStr);
+    const entries = await loadDayFull(dateStr, wd);
 
     const card = document.createElement('div');
     card.className='day-card';
@@ -452,7 +468,7 @@ function renderStaffDay(container, dateStr, wd, dateObj, entries){
       if(e.type==='block'){
         div.className='slot block';
         div.innerHTML = `<span class="t">${fmtTime(seg.start)} – ${fmtTime(seg.end)}</span><span class="who">Bloccato${e.name? ' — '+e.name : ''}</span>
-          <span class="del" onclick="removeEntry('${dateStr}', ${e.start})">rimuovi</span>`;
+          ${e.virtual ? '<span class="who" style="font-style:italic;">Ricorrente ogni settimana</span>' : `<span class="del" onclick="removeEntry('${dateStr}', ${e.start})">rimuovi</span>`}`;
       } else {
         div.className='slot busy';
         const label = e.type==='patient' ? 'Paziente' : 'Interno';
