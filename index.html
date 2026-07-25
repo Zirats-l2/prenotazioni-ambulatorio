@@ -222,6 +222,8 @@ const ADMIN_PIN = "1234"; // <-- cambia questo PIN
 // Finché restano "INSERISCI..." le email non verranno inviate (il resto del sito funziona comunque).
 const EMAILJS_SERVICE_ID  = "service_q53hgjg";
 const EMAILJS_TEMPLATE_ID = "template_d78rzt7";
+// MODIFICA QUI: template per la mail inviata al paziente quando lo studio annulla un appuntamento
+const EMAILJS_CANCEL_TEMPLATE_ID = "template_vmcrpe9";
 const EMAILJS_PUBLIC_KEY  = "9CzO19fkRxZMoHdwO";
 const EMAIL_CONFIGURED = !EMAILJS_SERVICE_ID.startsWith('INSERISCI');
 if(EMAIL_CONFIGURED && window.emailjs){ emailjs.init({publicKey: EMAILJS_PUBLIC_KEY}); }
@@ -470,6 +472,21 @@ function sendConfirmationEmail(dateStr, start, name, email){
   }).catch(err => console.error('Invio email non riuscito', err));
 }
 
+function sendCancellationEmail(dateStr, start, name, email){
+  if(!EMAIL_CONFIGURED || !window.emailjs || EMAILJS_CANCEL_TEMPLATE_ID.startsWith('INSERISCI')) return;
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dateObj = new Date(y, m-1, d);
+  const dLabel = dateObj.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  const dLabelCap = dLabel.charAt(0).toUpperCase() + dLabel.slice(1);
+
+  emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_CANCEL_TEMPLATE_ID, {
+    to_email: email,
+    patient_name: name,
+    appointment_date: dLabelCap,
+    appointment_time: `${fmtTime(start)} – ${fmtTime(start+PATIENT_DURATION)}`
+  }).catch(err => console.error('Invio email di annullamento non riuscito', err));
+}
+
 /* ---- gestione link di annullamento arrivato via email ---- */
 function handleIncomingCancelLink(){
   const params = new URLSearchParams(window.location.search);
@@ -672,7 +689,12 @@ function removeEntry(dateStr, start){
   `);
 }
 async function doRemoveEntry(dateStr, start){
+  const entries = await loadDay(dateStr);
+  const entry = entries.find(e => e.start === start);
   await deleteEntry(dateStr, start);
+  if(entry && entry.type === 'patient' && entry.email){
+    sendCancellationEmail(dateStr, start, entry.name, entry.email);
+  }
   closeModal();
   render();
 }
@@ -693,6 +715,7 @@ window.openPatientCancel = openPatientCancel;
 window.confirmPatientCancel = confirmPatientCancel;
 window.confirmPatientCancelDirect = confirmPatientCancelDirect;
 window.sendConfirmationEmail = sendConfirmationEmail;
+window.sendCancellationEmail = sendCancellationEmail;
 window.openStaffBooking = openStaffBooking;
 window.confirmStaffBooking = confirmStaffBooking;
 window.openBlockForm = openBlockForm;
