@@ -204,6 +204,7 @@
       <svg class="pulse" viewBox="0 0 180 34"><path d="M0 17 H55 L65 5 L75 29 L85 17 H180"/></svg>
     </div>
     <div style="display:flex;gap:8px;">
+      <button class="admin-toggle" id="multiBlockBtn" style="display:none;background:var(--teal-dark);" onclick="openMultiBlockModal()">Blocco su più giorni</button>
       <button class="admin-toggle" id="blockedUsersBtn" style="display:none;background:var(--block);" onclick="openBlockedPatientsModal()">Utenti bloccati</button>
       <button class="admin-toggle" id="adminBtn" onclick="openAdminModal()">Accesso medico/segreteria</button>
     </div>
@@ -435,6 +436,7 @@ async function render(){
   document.getElementById('adminBtn').textContent = isAdmin ? "Esci dall'area medico/segreteria" : 'Accesso medico/segreteria';
   document.getElementById('adminBtn').classList.toggle('active', isAdmin);
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('multiBlockBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
@@ -1045,6 +1047,92 @@ async function confirmBlock(dateStr, segEnd){
   render();
 }
 
+/* ---- blocco su più giorni (es. ferie, o stessa fascia oraria ripetuta) ---- */
+function openMultiBlockModal(){
+  const todayStr = fmtDateStr(todayNormalized());
+  let startTimeOptions = '';
+  for(let t=420; t<1260; t+=15){ startTimeOptions += `<option value="${t}" ${t===480?'selected':''}>${fmtTime(t)}</option>`; }
+  let durOptions = '';
+  [15,30,45,60,90,120,180,240,300,360,420,480].forEach(d=>{ durOptions += `<option value="${d}" ${d===120?'selected':''}>${d>=60 ? (d/60)+'h'+(d%60?(' '+(d%60)+'min'):'') : d+' min'}</option>`; });
+
+  showModal(`
+    <h3>Blocca su più giorni</h3>
+    <div class="sub">Utile per ferie, corsi, o per bloccare la stessa fascia oraria per diversi giorni.</div>
+
+    <label>Cosa vuole bloccare?</label>
+    <select id="mbMode" onchange="document.getElementById('mbTimeFields').style.display=this.value==='time'?'block':'none';">
+      <option value="full">Giornata intera (tutti gli orari di apertura)</option>
+      <option value="time">Una fascia oraria specifica, ripetuta ogni giorno</option>
+    </select>
+
+    <div id="mbTimeFields" style="display:none;">
+      <label>Orario di inizio</label><select id="mbStart">${startTimeOptions}</select>
+      <label>Durata</label><select id="mbDur">${durOptions}</select>
+    </div>
+
+    <label>Data inizio</label><input id="mbFrom" type="date" value="${todayStr}">
+    <label>Data fine (inclusa)</label><input id="mbTo" type="date" value="${todayStr}">
+    <label>Motivo (facoltativo, es. "Ferie")</label><input id="mbNote" type="text">
+
+    <div class="err" id="mbErr"></div>
+    <div class="note">I weekend e i giorni senza orario di apertura vengono saltati automaticamente. Se un giorno ha già un appuntamento che si sovrappone, quel giorno viene saltato e segnalato.</div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Annulla</button>
+      <button class="btn-primary" onclick="submitMultiBlock()">Blocca periodo</button>
+    </div>
+  `);
+}
+async function submitMultiBlock(){
+  const mode = document.getElementById('mbMode').value;
+  const fromStr = document.getElementById('mbFrom').value;
+  const toStr = document.getElementById('mbTo').value;
+  const note = document.getElementById('mbNote').value.trim();
+  const err = document.getElementById('mbErr');
+
+  if(!fromStr || !toStr){ err.textContent='Inserisci data inizio e data fine.'; err.style.display='block'; return; }
+  const [fy,fm,fd] = fromStr.split('-').map(Number);
+  const [ty,tm,td] = toStr.split('-').map(Number);
+  const from = new Date(fy,fm-1,fd);
+  const to = new Date(ty,tm-1,td);
+  if(to < from){ err.textContent='La data fine deve essere uguale o successiva alla data inizio.'; err.style.display='block'; return; }
+
+  let timeStart, timeDur;
+  if(mode==='time'){
+    timeStart = parseInt(document.getElementById('mbStart').value,10);
+    timeDur = parseInt(document.getElementById('mbDur').value,10);
+  }
+
+  let blocked=0, skippedConflict=0, skippedClosed=0;
+  const cur = new Date(from);
+  while(cur <= to){
+    const wd = cur.getDay();
+    const dateStr = fmtDateStr(cur);
+    const staff = STAFF_HOURS[wd];
+    if(!staff){ skippedClosed++; cur.setDate(cur.getDate()+1); continue; }
+
+    const s = mode==='full' ? staff[0] : timeStart;
+    const d = mode==='full' ? (staff[1]-staff[0]) : timeDur;
+
+    const entries = await loadDayFull(dateStr, wd);
+    if(entries.some(e => overlaps(s, d, e.start, e.duration))){
+      skippedConflict++;
+    } else {
+      await insertEntry(dateStr, {start:s, duration:d, type:'block', name:note || 'Bloccato', phone:''});
+      blocked++;
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+
+  showModal(`
+    <h3 style="color:var(--free);">✓ Blocco completato</h3>
+    <div class="sub">${blocked} giorno${blocked!==1?'i':''} bloccato${blocked!==1?'i':''}.${skippedConflict?` ${skippedConflict} giorno${skippedConflict!==1?'i':''} saltato/i per sovrapposizione con un appuntamento già presente.`:''}</div>
+    <div class="actions">
+      <button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button>
+    </div>
+  `);
+  render();
+}
+
 /* ---- rimozione ---- */
 function removeEntry(dateStr, start){
   showModal(`
@@ -1119,6 +1207,8 @@ window.openStaffBooking = openStaffBooking;
 window.confirmStaffBooking = confirmStaffBooking;
 window.openBlockForm = openBlockForm;
 window.confirmBlock = confirmBlock;
+window.openMultiBlockModal = openMultiBlockModal;
+window.submitMultiBlock = submitMultiBlock;
 window.removeEntry = removeEntry;
 window.doRemoveEntry = doRemoveEntry;
 
