@@ -570,6 +570,20 @@ function renderStaffDay(container, dateStr, wd, dateObj, entries){
 }
 
 /* ================== AGENDA MEDICO/SEGRETERIA (griglia 8-20) ================== */
+// Calcola l'affiancamento per le voci che si sovrappongono (es. un blocco e un
+// appuntamento nella stessa fascia): ognuna riceve una "corsia" così restano
+// entrambe visibili, una accanto all'altra, invece di sovrapporsi.
+function layoutEntries(entries){
+  return entries.map(e => {
+    const overlapping = entries
+      .filter(o => overlaps(e.start, e.duration, o.start, o.duration))
+      .sort((a,b) => (a.start-b.start) || ((a.type==='block'?0:1) - (b.type==='block'?0:1)));
+    const totalLanes = overlapping.length;
+    const lane = overlapping.indexOf(e);
+    return {entry:e, lane, totalLanes};
+  });
+}
+
 function adminMonthYM(){
   const now = new Date();
   let month = now.getMonth() + adminMonthOffset;
@@ -606,13 +620,16 @@ async function renderAdminGrid(container, dates){
     for(let h=8; h<=20; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
 
     let entriesHtml = '';
-    c.entries.forEach(e => {
+    const laidOut = layoutEntries(c.entries);
+    laidOut.forEach(({entry:e, lane, totalLanes}) => {
       const top = (e.start-GRID_START)*PX_PER_MIN;
       const h = Math.max(e.duration*PX_PER_MIN, 16);
       const cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
       const label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
       const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start})"`;
-      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">
+      const widthPct = 100/totalLanes;
+      const leftPct = lane*widthPct;
+      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + 3px);width:calc(${widthPct}% - 6px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">
         <div class="gname">${label}</div><div class="gtime">${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</div>
       </div>`;
     });
@@ -637,13 +654,10 @@ function onGridColClick(event, dateStr, wd){
   minute = Math.max(GRID_START, Math.min(minute, GRID_END-15));
 
   const entries = gridEntriesCache[dateStr] || [];
-  const sorted = [...entries].sort((a,b)=>a.start-b.start);
-  let segStart = GRID_START, segEnd = GRID_END;
-  for(const e of sorted){
-    if(e.start+e.duration <= minute) segStart = Math.max(segStart, e.start+e.duration);
-    if(e.start >= minute){ segEnd = Math.min(segEnd, e.start); break; }
-  }
-  if(minute < segStart || minute >= segEnd) return; // punto occupato, ignora
+  const insideReal = entries.some(e => e.type!=='block' && minute>=e.start && minute<e.start+e.duration);
+  if(insideReal) return; // punto occupato da un appuntamento reale, ignora (si clicca l'appuntamento stesso per gestirlo)
+
+  const {segStart, segEnd} = computeStaffSegment(entries, minute);
 
   showModal(`
     <h3>Nuovo inserimento</h3>
@@ -655,11 +669,29 @@ function onGridColClick(event, dateStr, wd){
   `);
 }
 
+// Calcola l'intervallo libero per lo staff attorno a un dato minuto, ignorando i blocchi
+// (i blocchi non impediscono a medico/segreteria di inserire un appuntamento; solo altri
+// appuntamenti reali — pazienti o impegni interni — lo impediscono).
+function computeStaffSegment(entries, minute){
+  const occ = entries.filter(e => e.type!=='block').sort((a,b)=>a.start-b.start);
+  let segStart = GRID_START, segEnd = GRID_END;
+  for(const e of occ){
+    if(e.start+e.duration <= minute) segStart = Math.max(segStart, e.start+e.duration);
+    if(e.start >= minute){ segEnd = Math.min(segEnd, e.start); break; }
+  }
+  return {segStart, segEnd};
+}
+
 function onGridEntryClick(dateStr, start){
   const entries = gridEntriesCache[dateStr] || [];
   const e = entries.find(x => x.start===start);
   if(!e) return;
   const label = e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno');
+  let extraBtn = '';
+  if(e.type==='block'){
+    const {segStart, segEnd} = computeStaffSegment(entries, e.start);
+    extraBtn = `<button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${e.start})">+ Appuntamento qui</button>`;
+  }
   showModal(`
     <h3>${label}</h3>
     <div class="sub">${fmtTime(e.start)} – ${fmtTime(e.start+e.duration)}</div>
@@ -667,6 +699,7 @@ function onGridEntryClick(dateStr, start){
     ${e.phone ? `<p style="margin:0;color:var(--ink-soft);font-size:13px;">${e.phone}</p>` : ''}
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
+      ${extraBtn}
       <button class="btn-primary" style="background:var(--busy);" onclick="doRemoveEntry('${dateStr}', ${start})">Rimuovi</button>
     </div>
   `);
@@ -997,7 +1030,7 @@ async function confirmStaffBooking(dateStr, segStart, segEnd){
   if(start+dur > segEnd){ err.textContent='La durata scelta supera lo slot libero disponibile.'; err.style.display='block'; return; }
 
   const entries = await loadDay(dateStr);
-  if(entries.some(e => overlaps(start, dur, e.start, e.duration))){
+  if(entries.some(e => e.type!=='block' && overlaps(start, dur, e.start, e.duration))){
     err.textContent='Sovrapposizione con un altro appuntamento.'; err.style.display='block';
     render(); return;
   }
@@ -1037,11 +1070,6 @@ async function confirmBlock(dateStr, segEnd){
 
   if(start+dur > segEnd){ err.textContent='La durata scelta supera lo slot libero disponibile.'; err.style.display='block'; return; }
 
-  const entries = await loadDay(dateStr);
-  if(entries.some(e => overlaps(start, dur, e.start, e.duration))){
-    err.textContent='Sovrapposizione con un altro appuntamento.'; err.style.display='block';
-    render(); return;
-  }
   await insertEntry(dateStr, {start, duration:dur, type:'block', name:note, phone:''});
   closeModal();
   render();
@@ -1075,7 +1103,7 @@ function openMultiBlockModal(){
     <label>Motivo (facoltativo, es. "Ferie")</label><input id="mbNote" type="text">
 
     <div class="err" id="mbErr"></div>
-    <div class="note">I weekend e i giorni senza orario di apertura vengono saltati automaticamente. Se un giorno ha già un appuntamento che si sovrappone, quel giorno viene saltato e segnalato.</div>
+    <div class="note">I weekend e i giorni senza orario di apertura vengono saltati automaticamente. Se un giorno ha già un appuntamento in quella fascia, il blocco viene comunque applicato e l'appuntamento resta visibile: andrà comunicato al paziente che è stato tolto.</div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
       <button class="btn-primary" onclick="submitMultiBlock()">Blocca periodo</button>
@@ -1102,7 +1130,7 @@ async function submitMultiBlock(){
     timeDur = parseInt(document.getElementById('mbDur').value,10);
   }
 
-  let blocked=0, skippedConflict=0, skippedClosed=0;
+  let blocked=0, withExistingAppt=0, skippedClosed=0;
   const cur = new Date(from);
   while(cur <= to){
     const wd = cur.getDay();
@@ -1114,18 +1142,17 @@ async function submitMultiBlock(){
     const d = mode==='full' ? (staff[1]-staff[0]) : timeDur;
 
     const entries = await loadDayFull(dateStr, wd);
-    if(entries.some(e => overlaps(s, d, e.start, e.duration))){
-      skippedConflict++;
-    } else {
-      await insertEntry(dateStr, {start:s, duration:d, type:'block', name:note || 'Bloccato', phone:''});
-      blocked++;
+    if(entries.some(e => e.type!=='block' && overlaps(s, d, e.start, e.duration))){
+      withExistingAppt++;
     }
+    await insertEntry(dateStr, {start:s, duration:d, type:'block', name:note || 'Bloccato', phone:''});
+    blocked++;
     cur.setDate(cur.getDate()+1);
   }
 
   showModal(`
     <h3 style="color:var(--free);">✓ Blocco completato</h3>
-    <div class="sub">${blocked} giorno${blocked!==1?'i':''} bloccato${blocked!==1?'i':''}.${skippedConflict?` ${skippedConflict} giorno${skippedConflict!==1?'i':''} saltato/i per sovrapposizione con un appuntamento già presente.`:''}</div>
+    <div class="sub">${blocked} giorno${blocked!==1?'i':''} bloccato${blocked!==1?'i':''}.${withExistingAppt?` Attenzione: ${withExistingAppt} giorno${withExistingAppt!==1?'i':''} avevano già un appuntamento in quella fascia — resta visibile nell'agenda, ma andrà comunicato al paziente che è stato tolto.`:''}</div>
     <div class="actions">
       <button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button>
     </div>
