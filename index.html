@@ -158,6 +158,40 @@
   .modal .note{font-size:11.5px;color:var(--ink-soft);margin-top:12px;line-height:1.5;}
 
   footer{margin-top:40px;font-size:12px;color:var(--ink-soft);text-align:center;}
+
+  /* ===== Agenda medico/segreteria (Giorno/Settimana/Mese) ===== */
+  .admin-tabs{display:flex;gap:6px;margin-bottom:14px;}
+  .tab-btn{background:#fff;border:1px solid var(--line);padding:7px 16px;border-radius:99px;font-size:13px;font-weight:600;color:var(--ink-soft);cursor:pointer;font-family:'Work Sans';}
+  .tab-btn.active{background:var(--teal-dark);color:#fff;border-color:var(--teal-dark);}
+  .tab-btn:hover:not(.active){background:var(--paper-2);}
+
+  .hour-grid-wrap{display:flex;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow-x:auto;box-shadow:0 2px 10px rgba(38,36,32,0.05);}
+  .hour-axis{flex:none;width:50px;position:relative;background:var(--paper-2);border-right:1px solid var(--line);}
+  .hour-axis .h-label{position:absolute;right:7px;transform:translateY(-50%);font-size:11px;color:var(--ink-soft);}
+  .day-columns{flex:1;display:flex;min-width:0;}
+  .day-col-wrap{flex:1;min-width:110px;display:flex;flex-direction:column;border-right:1px solid var(--line);}
+  .day-col-wrap:last-child{border-right:none;}
+  .day-col-head{padding:9px 6px;text-align:center;font-family:'Fraunces';font-size:13px;color:var(--teal-dark);border-bottom:1px solid var(--line);background:var(--paper-2);line-height:1.3;}
+  .day-col{position:relative;cursor:pointer;}
+  .day-col:hover{background:rgba(63,108,99,.03);}
+  .hour-line{position:absolute;left:0;right:0;height:1px;background:var(--line);pointer-events:none;}
+  .staff-band{position:absolute;left:2px;right:2px;background:rgba(21,162,74,.08);border-left:3px solid var(--free);border-radius:4px;pointer-events:none;}
+  .grid-entry{position:absolute;left:3px;right:3px;border-radius:6px;padding:3px 6px;font-size:11px;overflow:hidden;cursor:pointer;line-height:1.25;z-index:2;}
+  .grid-entry.patient{background:var(--busy-bg);color:#A32318;border:1px solid rgba(226,59,46,.4);}
+  .grid-entry.staffint{background:#DCEAF5;color:#1D4E73;border:1px solid rgba(29,78,115,.35);}
+  .grid-entry.blockentry{background:var(--block-bg);color:#8A5A08;border:1px solid rgba(217,130,11,.4);}
+  .grid-entry .gname{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .grid-entry .gtime{opacity:.85;}
+
+  .month-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+  .month-weekday-header{font-size:11px;text-transform:uppercase;color:var(--ink-soft);text-align:center;padding-bottom:2px;font-weight:600;letter-spacing:.03em;}
+  .month-cell{background:#fff;border:1px solid var(--line);border-radius:8px;padding:9px;min-height:64px;cursor:pointer;transition:box-shadow .15s ease;}
+  .month-cell:hover{box-shadow:0 3px 10px rgba(38,36,32,.08);}
+  .month-cell.other-month{opacity:.35;}
+  .month-cell .mdate{font-family:'Fraunces';font-weight:600;font-size:14px;color:var(--teal-dark);}
+  .month-cell .mcount{font-size:11px;color:var(--busy);margin-top:4px;}
+  .nav-today-btn{background:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;color:var(--teal-dark);font-weight:600;font-family:'Work Sans';}
+  .nav-today-btn:hover{background:var(--paper-2);}
 </style>
 </head>
 <body>
@@ -196,10 +230,19 @@
     <span id="legendBlock" style="display:none"><i class="dot" style="background:var(--block)"></i>Bloccato</span>
   </div>
 
+  <div class="admin-tabs" id="adminTabs" style="display:none;">
+    <button class="tab-btn" data-mode="day" onclick="setAdminViewMode('day')">Giorno</button>
+    <button class="tab-btn" data-mode="week" onclick="setAdminViewMode('week')">Settimana</button>
+    <button class="tab-btn" data-mode="month" onclick="setAdminViewMode('month')">Mese</button>
+  </div>
+
   <div class="week-nav">
-    <button id="prevWeekBtn" onclick="changeWeek(-1)">← Giorni precedenti</button>
-    <div class="week-label" id="weekLabel"></div>
-    <button onclick="changeWeek(1)">Giorni successivi →</button>
+    <button id="prevWeekBtn" onclick="navPrev()">← Precedente</button>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="week-label" id="weekLabel"></div>
+      <button class="nav-today-btn" id="todayBtn" style="display:none;" onclick="navToday()">Oggi</button>
+    </div>
+    <button onclick="navNext()">Successivo →</button>
   </div>
 
   <div class="days" id="daysContainer"></div>
@@ -250,6 +293,14 @@ if(EMAIL_CONFIGURED && window.emailjs){ emailjs.init({publicKey: EMAILJS_PUBLIC_
 /* ================== STATO ================== */
 let weekOffset = 0;
 let isAdmin = false;
+let adminViewMode = 'week'; // 'day' | 'week' | 'month'
+let adminDayOffset = 0;     // giorni feriali di distanza da oggi (vista Giorno)
+let adminMonthOffset = 0;   // mesi di distanza dal mese corrente (vista Mese)
+let gridEntriesCache = {};  // dateStr -> entries, popolato ad ogni render della griglia admin
+
+const GRID_START = 480; // 8:00 in minuti
+const GRID_END = 1200;  // 20:00 in minuti
+const PX_PER_MIN = 1;    // 1 minuto = 1px (12 ore = 720px)
 
 /* ================== UTILITA' ================== */
 function pad(n){return n.toString().padStart(2,'0');}
@@ -380,44 +431,64 @@ async function isPatientBlocked(email, phone){
 
 /* ================== RENDER SETTIMANA ================== */
 async function render(){
-  const dates = getWindowDates(weekOffset);
-
-  const opts = {day:'numeric', month:'long'};
-  document.getElementById('weekLabel').textContent =
-    dates[0].toLocaleDateString('it-IT',opts) + ' – ' + dates[4].toLocaleDateString('it-IT',opts);
-
   document.getElementById('legendBlock').style.display = isAdmin ? 'inline-flex' : 'none';
   document.getElementById('adminBtn').textContent = isAdmin ? "Esci dall'area medico/segreteria" : 'Accesso medico/segreteria';
   document.getElementById('adminBtn').classList.toggle('active', isAdmin);
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
-
-  const prevBtn = document.getElementById('prevWeekBtn');
-  prevBtn.style.visibility = (!isAdmin && weekOffset<=0) ? 'hidden' : 'visible';
+  document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
+  document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
 
   const container = document.getElementById('daysContainer');
   container.innerHTML = '';
+  const prevBtn = document.getElementById('prevWeekBtn');
 
-  for(const date of dates){
-    const wd = date.getDay();
-    const dateStr = fmtDateStr(date);
-    const entries = await loadDayFull(dateStr, wd);
+  if(!isAdmin){
+    container.className = 'days';
+    const dates = getWindowDates(weekOffset);
+    const opts = {day:'numeric', month:'long'};
+    document.getElementById('weekLabel').textContent =
+      dates[0].toLocaleDateString('it-IT',opts) + ' – ' + dates[4].toLocaleDateString('it-IT',opts);
+    prevBtn.style.visibility = (weekOffset<=0) ? 'hidden' : 'visible';
 
-    const card = document.createElement('div');
-    card.className='day-card';
-    const dLabel = date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
-    const isToday = dateStr === fmtDateStr(todayNormalized());
-    card.innerHTML = `<div class="day-head"><div class="name">${DAY_NAMES[wd]}${isToday?' · Oggi':''}</div><div class="date">${dLabel}</div></div>
-                       <div class="slots" id="slots-${dateStr}"></div>`;
-    container.appendChild(card);
+    for(const date of dates){
+      const wd = date.getDay();
+      const dateStr = fmtDateStr(date);
+      const entries = await loadDayFull(dateStr, wd);
 
-    const slotsEl = card.querySelector('.slots');
-    if(isAdmin){
-      renderStaffDay(slotsEl, dateStr, wd, date, entries);
-    } else {
-      renderPatientDay(slotsEl, dateStr, wd, date, entries);
+      const card = document.createElement('div');
+      card.className='day-card';
+      const dLabel = date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
+      const isToday = dateStr === fmtDateStr(todayNormalized());
+      card.innerHTML = `<div class="day-head"><div class="name">${DAY_NAMES[wd]}${isToday?' · Oggi':''}</div><div class="date">${dLabel}</div></div>
+                         <div class="slots" id="slots-${dateStr}"></div>`;
+      container.appendChild(card);
+      renderPatientDay(card.querySelector('.slots'), dateStr, wd, date, entries);
     }
+    return;
+  }
+
+  // ---- area medico/segreteria ----
+  container.className = '';
+  prevBtn.style.visibility = 'visible';
+
+  if(adminViewMode === 'day'){
+    const date = addBusinessDays(nextOrSameWeekday(todayNormalized()), adminDayOffset);
+    document.getElementById('weekLabel').textContent = capFirst(date.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'}));
+    await renderAdminGrid(container, [date]);
+  } else if(adminViewMode === 'month'){
+    const {year,month} = adminMonthYM();
+    document.getElementById('weekLabel').textContent = capFirst(new Date(year,month,1).toLocaleDateString('it-IT',{month:'long', year:'numeric'}));
+    await renderAdminMonth(container, year, month);
+  } else {
+    const dates = getWindowDates(weekOffset);
+    const opts = {day:'numeric', month:'long'};
+    document.getElementById('weekLabel').textContent =
+      dates[0].toLocaleDateString('it-IT',opts) + ' – ' + dates[4].toLocaleDateString('it-IT',opts);
+    await renderAdminGrid(container, dates);
   }
 }
+function capFirst(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 
 /* ---- vista paziente: griglia fissa da 30 minuti ---- */
 function renderPatientDay(container, dateStr, wd, dateObj, entries){
@@ -495,6 +566,162 @@ function renderStaffDay(container, dateStr, wd, dateObj, entries){
   });
   if(segments.length===0) container.innerHTML = '<div class="empty-note">Nessun orario disponibile.</div>';
 }
+
+/* ================== AGENDA MEDICO/SEGRETERIA (griglia 8-20) ================== */
+function adminMonthYM(){
+  const now = new Date();
+  let month = now.getMonth() + adminMonthOffset;
+  let year = now.getFullYear();
+  while(month<0){ month+=12; year--; }
+  while(month>11){ month-=12; year++; }
+  return {year, month};
+}
+
+async function renderAdminGrid(container, dates){
+  const cols = [];
+  for(const date of dates){
+    const wd = date.getDay();
+    const dateStr = fmtDateStr(date);
+    const entries = await loadDayFull(dateStr, wd);
+    gridEntriesCache[dateStr] = entries;
+    cols.push({date, wd, dateStr, entries});
+  }
+
+  const heightPx = (GRID_END-GRID_START)*PX_PER_MIN;
+  let axisHtml = `<div class="hour-axis" style="height:${heightPx}px;">`;
+  for(let h=8; h<=20; h++){
+    axisHtml += `<div class="h-label" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;">${h}:00</div>`;
+  }
+  axisHtml += `</div>`;
+
+  let colsHtml = '';
+  cols.forEach(c => {
+    const staff = STAFF_HOURS[c.wd];
+    const bandHtml = staff
+      ? `<div class="staff-band" style="top:${(staff[0]-GRID_START)*PX_PER_MIN}px;height:${(staff[1]-staff[0])*PX_PER_MIN}px;" title="Orario di apertura studio"></div>`
+      : '';
+    let linesHtml = '';
+    for(let h=8; h<=20; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
+
+    let entriesHtml = '';
+    c.entries.forEach(e => {
+      const top = (e.start-GRID_START)*PX_PER_MIN;
+      const h = Math.max(e.duration*PX_PER_MIN, 16);
+      const cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
+      const label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
+      const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start})"`;
+      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">
+        <div class="gname">${label}</div><div class="gtime">${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</div>
+      </div>`;
+    });
+
+    const isToday = c.dateStr === fmtDateStr(todayNormalized());
+    const dLabel = c.date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
+    colsHtml += `<div class="day-col-wrap">
+      <div class="day-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel}</span></div>
+      <div class="day-col" style="height:${heightPx}px;" onclick="onGridColClick(event,'${c.dateStr}', ${c.wd})">
+        ${linesHtml}${bandHtml}${entriesHtml}
+      </div>
+    </div>`;
+  });
+
+  container.innerHTML = `<div class="hour-grid-wrap"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`;
+}
+
+function onGridColClick(event, dateStr, wd){
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = event.clientY - rect.top;
+  let minute = GRID_START + Math.round((y/PX_PER_MIN)/15)*15;
+  minute = Math.max(GRID_START, Math.min(minute, GRID_END-15));
+
+  const entries = gridEntriesCache[dateStr] || [];
+  const sorted = [...entries].sort((a,b)=>a.start-b.start);
+  let segStart = GRID_START, segEnd = GRID_END;
+  for(const e of sorted){
+    if(e.start+e.duration <= minute) segStart = Math.max(segStart, e.start+e.duration);
+    if(e.start >= minute){ segEnd = Math.min(segEnd, e.start); break; }
+  }
+  if(minute < segStart || minute >= segEnd) return; // punto occupato, ignora
+
+  showModal(`
+    <h3>Nuovo inserimento</h3>
+    <div class="sub">${DAY_NAMES[wd]}, circa ${fmtTime(minute)}</div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="openBlockForm('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Blocca orario</button>
+      <button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Nuovo appuntamento</button>
+    </div>
+  `);
+}
+
+function onGridEntryClick(dateStr, start){
+  const entries = gridEntriesCache[dateStr] || [];
+  const e = entries.find(x => x.start===start);
+  if(!e) return;
+  const label = e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno');
+  showModal(`
+    <h3>${label}</h3>
+    <div class="sub">${fmtTime(e.start)} – ${fmtTime(e.start+e.duration)}</div>
+    ${e.name ? `<p style="margin:8px 0 2px;font-weight:600;">${e.name}</p>` : ''}
+    ${e.phone ? `<p style="margin:0;color:var(--ink-soft);font-size:13px;">${e.phone}</p>` : ''}
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
+      <button class="btn-primary" style="background:var(--busy);" onclick="doRemoveEntry('${dateStr}', ${start})">Rimuovi</button>
+    </div>
+  `);
+}
+
+async function renderAdminMonth(container, year, month){
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month+1, 0);
+  const startDate = getMonday(first);
+
+  const weeks = [];
+  let cur = new Date(startDate);
+  while(true){
+    const week = [];
+    for(let i=0;i<5;i++){ const d=new Date(cur); d.setDate(cur.getDate()+i); week.push(d); }
+    weeks.push(week);
+    cur.setDate(cur.getDate()+7);
+    if(cur > last) break;
+  }
+
+  const allDates = weeks.flat();
+  const entriesArr = await Promise.all(allDates.map(d => loadDayFull(fmtDateStr(d), d.getDay())));
+  const entriesMap = {};
+  allDates.forEach((d,i) => { entriesMap[fmtDateStr(d)] = entriesArr[i]; });
+
+  let headerHtml = ['Lun','Mar','Mer','Gio','Ven'].map(n => `<div class="month-weekday-header">${n}</div>`).join('');
+  let cellsHtml = '';
+  allDates.forEach(date => {
+    const dateStr = fmtDateStr(date);
+    const inMonth = date.getMonth()===month;
+    const realCount = (entriesMap[dateStr]||[]).filter(e => !e.virtual).length;
+    const isToday = dateStr === fmtDateStr(todayNormalized());
+    cellsHtml += `<div class="month-cell ${inMonth?'':'other-month'}" onclick="goToDayFromMonth('${dateStr}')">
+      <div class="mdate">${date.getDate()}${isToday?' · Oggi':''}</div>
+      ${realCount>0 ? `<div class="mcount">${realCount} appuntament${realCount>1?'i':'o'}</div>` : '<div class="mcount" style="color:var(--ink-soft);">Libero</div>'}
+    </div>`;
+  });
+
+  container.innerHTML = `<div class="month-grid">${headerHtml}${cellsHtml}</div>`;
+}
+
+function goToDayFromMonth(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const target = new Date(y, m-1, d);
+  const base = nextOrSameWeekday(todayNormalized());
+  let diff = 0, cur = new Date(base);
+  if(target >= base){
+    while(fmtDateStr(cur) !== dateStr){ cur.setDate(cur.getDate()+1); if(cur.getDay()!==0 && cur.getDay()!==6) diff++; }
+  } else {
+    while(fmtDateStr(cur) !== dateStr){ cur.setDate(cur.getDate()-1); if(cur.getDay()!==0 && cur.getDay()!==6) diff--; }
+  }
+  adminDayOffset = diff;
+  adminViewMode = 'day';
+  render();
+}
+
+function setAdminViewMode(mode){ adminViewMode = mode; render(); }
 
 /* ================== MODALI ================== */
 function showModal(html){
@@ -731,12 +958,12 @@ async function removeBlockedPatient(id){
 }
 
 /* ---- prenotazione staff (durata libera) ---- */
-function openStaffBooking(dateStr, segStart, segEnd){
+function openStaffBooking(dateStr, segStart, segEnd, presetStart){
   const maxDur = segEnd - segStart;
   let startOptions = '';
-  for(let t=segStart; t<segEnd; t+=15){ startOptions += `<option value="${t}">${fmtTime(t)}</option>`; }
+  for(let t=segStart; t<segEnd; t+=15){ const sel = (presetStart!==undefined && t===presetStart) ? ' selected' : ''; startOptions += `<option value="${t}"${sel}>${fmtTime(t)}</option>`; }
   let durOptions = '';
-  [15,30,45,60,90,120].filter(d=>d<=maxDur).forEach(d=>{ durOptions += `<option value="${d}">${d} min</option>`; });
+  [15,30,45,60,90,120].filter(d=>d<=maxDur).forEach(d=>{ durOptions += `<option value="${d}" ${d===30?'selected':''}>${d} min</option>`; });
 
   showModal(`
     <h3>Nuovo appuntamento</h3>
@@ -779,10 +1006,10 @@ async function confirmStaffBooking(dateStr, segStart, segEnd){
 }
 
 /* ---- blocco slot con durata personalizzabile ---- */
-function openBlockForm(dateStr, segStart, segEnd){
+function openBlockForm(dateStr, segStart, segEnd, presetStart){
   const maxDur = segEnd - segStart;
   let startOptions = '';
-  for(let t=segStart; t<segEnd; t+=15){ startOptions += `<option value="${t}">${fmtTime(t)}</option>`; }
+  for(let t=segStart; t<segEnd; t+=15){ const sel = (presetStart!==undefined && t===presetStart) ? ' selected' : ''; startOptions += `<option value="${t}"${sel}>${fmtTime(t)}</option>`; }
   let durOptions = '';
   [15,30,45,60,90,120,180,240].filter(d=>d<=maxDur).forEach(d=>{ durOptions += `<option value="${d}">${d} min</option>`; });
   durOptions += `<option value="${maxDur}" ${maxDur%15!==0?'selected':''}>Fino a fine slot libero (${maxDur} min)</option>`;
@@ -845,10 +1072,35 @@ function changeWeek(delta){
   if(!isAdmin && weekOffset+delta < 0) return;
   weekOffset += delta; render();
 }
+function navPrev(){
+  if(!isAdmin){ changeWeek(-1); return; }
+  if(adminViewMode==='day') adminDayOffset -= 1;
+  else if(adminViewMode==='month') adminMonthOffset -= 1;
+  else weekOffset -= 1;
+  render();
+}
+function navNext(){
+  if(!isAdmin){ changeWeek(1); return; }
+  if(adminViewMode==='day') adminDayOffset += 1;
+  else if(adminViewMode==='month') adminMonthOffset += 1;
+  else weekOffset += 1;
+  render();
+}
+function navToday(){
+  adminDayOffset = 0; weekOffset = 0; adminMonthOffset = 0;
+  render();
+}
 
 /* ================== ESPOSIZIONE GLOBALE ================== */
 /* Necessario perché gli attributi onclick nell'HTML devono trovare queste funzioni su window */
 window.changeWeek = changeWeek;
+window.navPrev = navPrev;
+window.navNext = navNext;
+window.navToday = navToday;
+window.setAdminViewMode = setAdminViewMode;
+window.onGridColClick = onGridColClick;
+window.onGridEntryClick = onGridEntryClick;
+window.goToDayFromMonth = goToDayFromMonth;
 window.openAdminModal = openAdminModal;
 window.closeModal = closeModal;
 window.checkPin = checkPin;
