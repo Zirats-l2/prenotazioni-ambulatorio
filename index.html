@@ -218,6 +218,9 @@
   .grid-entry.patient{background:var(--busy-bg);color:#A32318;border:1px solid rgba(226,59,46,.4);}
   .grid-entry.staffint{background:#DCEAF5;color:#1D4E73;border:1px solid rgba(29,78,115,.35);}
   .grid-entry.blockentry{background:var(--block-bg);color:#8A5A08;border:1px solid rgba(217,130,11,.4);}
+  .grid-entry.pharma-free{background:#D6ECFB;color:#0B4C7A;border:1px solid rgba(11,108,168,.4);}
+  .grid-entry.pharma-busy{background:#0B3C63;color:#fff;border:1px solid #062845;}
+  .grid-entry.pharma-busy .gtime{opacity:.85;color:#fff;}
   .grid-entry .gname{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .grid-entry .gtime{opacity:.85;}
 
@@ -797,12 +800,23 @@ async function renderAdminGrid(container, dates, calendar='medico'){
     for(let h=8; h<=20; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
 
     let entriesHtml = '';
-    const laidOut = layoutEntries(c.entries);
+    // Nasconde il segnaposto "Informatore farmaceutico" quando è già stato prenotato da un appuntamento reale nello stesso orario
+    const visibleEntries = c.entries.filter(e =>
+      !(e.virtual && c.entries.some(o => !o.virtual && overlaps(e.start, e.duration, o.start, o.duration)))
+    );
+    const laidOut = layoutEntries(visibleEntries);
     laidOut.forEach(({entry:e, lane, totalLanes}) => {
       const top = (e.start-GRID_START)*PX_PER_MIN;
       const h = Math.max(e.duration*PX_PER_MIN, 16);
-      const cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
-      const label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
+      const isPharma = calendar==='medico' && (RECURRING_BLOCKS[c.wd]||[]).some(b => overlaps(e.start, e.duration, b.start, b.duration));
+      let cls, label;
+      if(isPharma){
+        cls = e.virtual ? 'pharma-free' : 'pharma-busy';
+        label = e.virtual ? 'Informatore farmaceutico — Libero' : (e.name || 'Informatore farmaceutico');
+      } else {
+        cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
+        label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
+      }
       const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start}, '${calendar}')"`;
       const widthPct = 100/totalLanes;
       const leftPct = lane*widthPct;
@@ -885,7 +899,10 @@ function onGridEntryClick(dateStr, start, calendar){
   const entries = gridEntriesCache[calendar+'|'+dateStr] || [];
   const e = entries.find(x => x.start===start);
   if(!e) return;
-  const label = e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno');
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const wd = new Date(y,m-1,d).getDay();
+  const isPharma = calendar==='medico' && (RECURRING_BLOCKS[wd]||[]).some(b => overlaps(e.start, e.duration, b.start, b.duration));
+  const label = isPharma ? 'Informatore farmaceutico' : (e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno'));
   let extraBtn = '';
   if(e.type==='block' && calendar==='medico'){
     const {segStart, segEnd} = computeStaffSegment(entries, e.start);
@@ -896,6 +913,7 @@ function onGridEntryClick(dateStr, start, calendar){
     <div class="sub">${fmtTime(e.start)} – ${fmtTime(e.start+e.duration)}</div>
     ${e.name ? `<p style="margin:8px 0 2px;font-weight:600;">${e.name}</p>` : ''}
     ${e.phone ? `<p style="margin:0;color:var(--ink-soft);font-size:13px;">${e.phone}</p>` : ''}
+    ${e.email ? `<p style="margin:2px 0 0;color:var(--ink-soft);font-size:13px;">${e.email}</p>` : ''}
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
       ${extraBtn}
@@ -1223,6 +1241,7 @@ function openStaffBooking(dateStr, segStart, segEnd, presetStart){
     </select>
     <label>Nome (facoltativo per impegno interno)</label><input id="sNome" type="text">
     <label>Telefono (facoltativo)</label><input id="sTel" type="tel">
+    <label>Email (facoltativa)</label><input id="sEmail" type="email">
     <div class="err" id="sErr"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
@@ -1236,6 +1255,7 @@ async function confirmStaffBooking(dateStr, segStart, segEnd){
   const type = document.getElementById('sType').value;
   const nome = document.getElementById('sNome').value.trim();
   const tel = document.getElementById('sTel').value.trim();
+  const email = document.getElementById('sEmail').value.trim();
   const err = document.getElementById('sErr');
 
   if(start+dur > segEnd){ err.textContent='La durata scelta supera lo slot libero disponibile.'; err.style.display='block'; return; }
@@ -1245,8 +1265,8 @@ async function confirmStaffBooking(dateStr, segStart, segEnd){
     err.textContent='Sovrapposizione con un altro appuntamento.'; err.style.display='block';
     render(); return;
   }
-  entries.push({start, duration:dur, type, name:nome, phone:tel});
-  await insertEntry(dateStr, {start, duration:dur, type, name:nome, phone:tel});
+  entries.push({start, duration:dur, type, name:nome, phone:tel, email});
+  await insertEntry(dateStr, {start, duration:dur, type, name:nome, phone:tel, email});
   closeModal();
   render();
 }
