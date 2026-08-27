@@ -260,6 +260,11 @@
     <span id="legendBlock" style="display:none"><i class="dot" style="background:var(--block)"></i>Bloccato</span>
   </div>
 
+  <div class="admin-tabs" id="calendarSwitch" style="display:none;">
+    <button class="tab-btn" data-cal="medico" onclick="setAdminCalendar('medico')">Calendario Medico</button>
+    <button class="tab-btn" data-cal="infermiera" onclick="setAdminCalendar('infermiera')">Calendario Infermiera</button>
+  </div>
+
   <div class="admin-tabs" id="adminTabs" style="display:none;">
     <button class="tab-btn" data-mode="day" onclick="setAdminViewMode('day')">Giorno</button>
     <button class="tab-btn" data-mode="week" onclick="setAdminViewMode('week')">Settimana</button>
@@ -302,6 +307,18 @@ const PATIENT_HOURS = { // orario in cui i pazienti possono prenotare
 const PATIENT_DURATION = 30;
 const DAY_NAMES = {1:'Lunedì',2:'Martedì',3:'Mercoledì',4:'Giovedì',5:'Venerdì'};
 
+// Calendario dell'infermiera: orari e prestazioni a durata fissa
+const NURSE_HOURS = {
+  2: [900, 1020], // Mar 15:00–17:00
+  4: [660, 780],  // Gio 11:00–13:00
+};
+const NURSE_SERVICES = [
+  {id:'vaccinazione', label:'Vaccinazione', duration:5},
+  {id:'medicazione', label:'Medicazione', duration:15},
+  {id:'lavaggio', label:'Lavaggio auricolare', duration:10},
+];
+const VACCINE_SERVICE = NURSE_SERVICES[0];
+
 // Primi 15 minuti riservati automaticamente ogni settimana (non richiede azione manuale)
 const RECURRING_BLOCKS = {
   3: [{start:900, duration:15, label:'Informatore farmaceutico'}], // Mer 15:00–15:15
@@ -326,7 +343,8 @@ let isAdmin = false;
 let adminViewMode = 'week'; // 'day' | 'week' | 'month'
 let adminDayOffset = 0;     // giorni feriali di distanza da oggi (vista Giorno)
 let adminMonthOffset = 0;   // mesi di distanza dal mese corrente (vista Mese)
-let gridEntriesCache = {};  // dateStr -> entries, popolato ad ogni render della griglia admin
+let adminCalendar = 'medico'; // 'medico' | 'infermiera'
+let gridEntriesCache = {};  // "calendario|dataStr" -> entries, popolato ad ogni render della griglia admin
 
 const GRID_START = 480; // 8:00 in minuti
 const GRID_END = 1200;  // 20:00 in minuti
@@ -399,9 +417,9 @@ function sbHeaders(extra){
   }, extra || {});
 }
 
-async function loadDay(dateStr){
+async function loadDay(dateStr, calendar='medico'){
   try{
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/bookings?date=eq.${dateStr}&select=*`, { headers: sbHeaders() });
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/bookings?date=eq.${dateStr}&calendar=eq.${calendar}&select=*`, { headers: sbHeaders() });
     if(!res.ok) return [];
     const rows = await res.json();
     return rows.map(r => ({start:r.start, duration:r.duration, type:r.type, name:r.name, phone:r.phone, email:r.email}));
@@ -412,27 +430,27 @@ function getRecurringBlocks(wd){
   return (RECURRING_BLOCKS[wd]||[]).map(b => ({start:b.start, duration:b.duration, type:'block', name:b.label, phone:'', virtual:true}));
 }
 
-async function loadDayFull(dateStr, wd){
-  const entries = await loadDay(dateStr);
-  return entries.concat(getRecurringBlocks(wd));
+async function loadDayFull(dateStr, wd, calendar='medico'){
+  const entries = await loadDay(dateStr, calendar);
+  return calendar==='medico' ? entries.concat(getRecurringBlocks(wd)) : entries;
 }
 
-async function insertEntry(dateStr, entry){
+async function insertEntry(dateStr, entry, calendar='medico'){
   try{
     await fetch(`${SUPABASE_URL}/rest/v1/bookings`, {
       method:'POST',
       headers: sbHeaders({'Content-Type':'application/json', Prefer:'return=minimal'}),
       body: JSON.stringify({
-        date: dateStr, start: entry.start, duration: entry.duration, type: entry.type,
+        date: dateStr, calendar, start: entry.start, duration: entry.duration, type: entry.type,
         name: entry.name || '', phone: entry.phone || '', email: entry.email || ''
       })
     });
   }catch(e){ console.error('Errore salvataggio prenotazione', e); }
 }
 
-async function deleteEntry(dateStr, start){
+async function deleteEntry(dateStr, start, calendar='medico'){
   try{
-    await fetch(`${SUPABASE_URL}/rest/v1/bookings?date=eq.${dateStr}&start=eq.${start}`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/bookings?date=eq.${dateStr}&start=eq.${start}&calendar=eq.${calendar}`, {
       method:'DELETE', headers: sbHeaders()
     });
   }catch(e){ console.error('Errore eliminazione prenotazione', e); }
@@ -485,14 +503,18 @@ async function loadAnnouncement(){
     return rows[0] || null;
   }catch(e){ console.error('Errore caricamento avviso', e); return null; }
 }
-async function saveAnnouncement(message, type, active){
+async function saveAnnouncement(message, type, active, showVaccineLink){
   try{
     await fetch(`${SUPABASE_URL}/rest/v1/announcement?id=eq.1`, {
       method:'PATCH',
       headers: sbHeaders({'Content-Type':'application/json', Prefer:'return=minimal'}),
-      body: JSON.stringify({message, type, active, updated_at:new Date().toISOString()})
+      body: JSON.stringify({message, type, active, show_vaccine_link:showVaccineLink, updated_at:new Date().toISOString()})
     });
   }catch(e){ console.error('Errore salvataggio avviso', e); }
+}
+
+function vaccineLinkButtonHtml(){
+  return `<a href="?vaccino=1" class="btn-primary" style="display:inline-block;text-decoration:none;margin-top:10px;padding:9px 16px;border-radius:8px;font-size:13.5px;font-weight:600;">Prenota la tua vaccinazione</a>`;
 }
 
 function renderAnnouncementBanner(){
@@ -504,7 +526,8 @@ function renderAnnouncementBanner(){
   const type = currentAnnouncement.type || 'info';
   el.className = 'announce-banner ' + type;
   el.style.display = 'flex';
-  el.innerHTML = `${ANNOUNCE_ICON}<div><span class="a-title">${ANNOUNCE_TYPE_LABEL[type]||'Avviso'}</span>${currentAnnouncement.message}</div>`;
+  const vaccineBtn = currentAnnouncement.show_vaccine_link ? vaccineLinkButtonHtml() : '';
+  el.innerHTML = `${ANNOUNCE_ICON}<div><span class="a-title">${ANNOUNCE_TYPE_LABEL[type]||'Avviso'}</span>${currentAnnouncement.message}<br>${vaccineBtn}</div>`;
 }
 
 async function initAnnouncement(){
@@ -513,16 +536,18 @@ async function initAnnouncement(){
   if(currentAnnouncement && currentAnnouncement.active && currentAnnouncement.message.trim() && !announcementPopupShown){
     announcementPopupShown = true;
     const type = currentAnnouncement.type || 'info';
+    const vaccineBtn = currentAnnouncement.show_vaccine_link ? vaccineLinkButtonHtml() : '';
     showModal(`
       <h3>${ANNOUNCE_TYPE_LABEL[type]||'Avviso'}</h3>
       <div class="sub" style="color:var(--ink);">${currentAnnouncement.message}</div>
-      <div class="actions"><button class="btn-primary" style="flex:1" onclick="closeModal()">Ho capito</button></div>
+      ${vaccineBtn}
+      <div class="actions"><button class="btn-ghost" style="flex:1" onclick="closeModal()">Ho capito</button></div>
     `);
   }
 }
 
 function openAnnouncementModal(){
-  const a = currentAnnouncement || {message:'', type:'info', active:false};
+  const a = currentAnnouncement || {message:'', type:'info', active:false, show_vaccine_link:false};
   showModal(`
     <h3>Avviso per i pazienti</h3>
     <div class="sub">Visibile come banner in cima al sito e come pop-up al primo accesso, finché è attivo.</div>
@@ -536,6 +561,9 @@ function openAnnouncementModal(){
     <label style="display:flex;align-items:center;gap:8px;margin-top:14px;">
       <input id="anActive" type="checkbox" style="width:auto;" ${a.active?'checked':''}> Avviso attivo (visibile ai pazienti)
     </label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+      <input id="anVaccine" type="checkbox" style="width:auto;" ${a.show_vaccine_link?'checked':''}> Mostra pulsante "Prenota la tua vaccinazione" (link diretto al calendario infermiera)
+    </label>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
       <button class="btn-primary" onclick="submitAnnouncement()">Salva</button>
@@ -546,8 +574,9 @@ async function submitAnnouncement(){
   const message = document.getElementById('anMsg').value.trim();
   const type = document.getElementById('anType').value;
   const active = document.getElementById('anActive').checked;
-  await saveAnnouncement(message, type, active);
-  currentAnnouncement = {message, type, active};
+  const showVaccineLink = document.getElementById('anVaccine').checked;
+  await saveAnnouncement(message, type, active, showVaccineLink);
+  currentAnnouncement = {message, type, active, show_vaccine_link:showVaccineLink};
   renderAnnouncementBanner();
   closeModal();
 }
@@ -558,11 +587,13 @@ async function render(){
   document.getElementById('adminBtn').textContent = isAdmin ? "Esci dall'area medico/segreteria" : 'Accesso medico/segreteria';
   document.getElementById('adminBtn').classList.toggle('active', isAdmin);
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
-  document.getElementById('multiBlockBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('multiBlockBtn').style.display = (isAdmin && adminCalendar==='medico') ? 'inline-block' : 'none';
   document.getElementById('announceBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
+  document.getElementById('calendarSwitch').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
+  document.querySelectorAll('#adminTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
+  document.querySelectorAll('#calendarSwitch .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.cal===adminCalendar));
 
   const container = document.getElementById('daysContainer');
   container.innerHTML = '';
@@ -608,20 +639,21 @@ async function render(){
   if(adminViewMode === 'day'){
     const date = addBusinessDays(nextOrSameWeekday(todayNormalized()), adminDayOffset);
     document.getElementById('weekLabel').textContent = capFirst(date.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'}));
-    await renderAdminGrid(container, [date]);
+    await renderAdminGrid(container, [date], adminCalendar);
   } else if(adminViewMode === 'month'){
     const {year,month} = adminMonthYM();
     document.getElementById('weekLabel').textContent = capFirst(new Date(year,month,1).toLocaleDateString('it-IT',{month:'long', year:'numeric'}));
-    await renderAdminMonth(container, year, month);
+    await renderAdminMonth(container, year, month, adminCalendar);
   } else {
     const dates = getWindowDates(weekOffset);
     const opts = {day:'numeric', month:'long'};
     document.getElementById('weekLabel').textContent =
       dates[0].toLocaleDateString('it-IT',opts) + ' – ' + dates[4].toLocaleDateString('it-IT',opts);
-    await renderAdminGrid(container, dates);
+    await renderAdminGrid(container, dates, adminCalendar);
   }
 }
 function capFirst(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+function setAdminCalendar(cal){ adminCalendar = cal; render(); }
 
 /* ---- vista paziente: griglia fissa da 30 minuti ---- */
 function renderPatientDay(container, dateStr, wd, dateObj, entries){
@@ -724,13 +756,14 @@ function adminMonthYM(){
   return {year, month};
 }
 
-async function renderAdminGrid(container, dates){
+async function renderAdminGrid(container, dates, calendar='medico'){
+  const HOURS = calendar==='infermiera' ? NURSE_HOURS : STAFF_HOURS;
   const cols = [];
   for(const date of dates){
     const wd = date.getDay();
     const dateStr = fmtDateStr(date);
-    const entries = await loadDayFull(dateStr, wd);
-    gridEntriesCache[dateStr] = entries;
+    const entries = await loadDayFull(dateStr, wd, calendar);
+    gridEntriesCache[calendar+'|'+dateStr] = entries;
     cols.push({date, wd, dateStr, entries});
   }
 
@@ -743,9 +776,10 @@ async function renderAdminGrid(container, dates){
 
   let colsHtml = '';
   cols.forEach(c => {
-    const staff = STAFF_HOURS[c.wd];
-    const bandHtml = staff
-      ? `<div class="staff-band" style="top:${(staff[0]-GRID_START)*PX_PER_MIN}px;height:${(staff[1]-staff[0])*PX_PER_MIN}px;" title="Orario di apertura studio"></div>`
+    const band = HOURS[c.wd];
+    const bandTitle = calendar==='infermiera' ? 'Orario disponibile infermiera' : 'Orario di apertura studio';
+    const bandHtml = band
+      ? `<div class="staff-band" style="top:${(band[0]-GRID_START)*PX_PER_MIN}px;height:${(band[1]-band[0])*PX_PER_MIN}px;" title="${bandTitle}"></div>`
       : '';
     let linesHtml = '';
     for(let h=8; h<=20; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
@@ -757,7 +791,7 @@ async function renderAdminGrid(container, dates){
       const h = Math.max(e.duration*PX_PER_MIN, 16);
       const cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
       const label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
-      const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start})"`;
+      const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start}, '${calendar}')"`;
       const widthPct = 100/totalLanes;
       const leftPct = lane*widthPct;
       entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + 3px);width:calc(${widthPct}% - 6px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">
@@ -769,7 +803,7 @@ async function renderAdminGrid(container, dates){
     const dLabel = c.date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
     colsHtml += `<div class="day-col-wrap">
       <div class="day-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel}</span></div>
-      <div class="day-col" style="height:${heightPx}px;" onclick="onGridColClick(event,'${c.dateStr}', ${c.wd})">
+      <div class="day-col" style="height:${heightPx}px;" onclick="onGridColClick(event,'${c.dateStr}', ${c.wd}, '${calendar}')">
         ${linesHtml}${bandHtml}${entriesHtml}
       </div>
     </div>`;
@@ -778,17 +812,38 @@ async function renderAdminGrid(container, dates){
   container.innerHTML = `<div class="hour-grid-wrap"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`;
 }
 
-function onGridColClick(event, dateStr, wd){
+function onGridColClick(event, dateStr, wd, calendar){
+  calendar = calendar || 'medico';
   const rect = event.currentTarget.getBoundingClientRect();
   const y = event.clientY - rect.top;
   let minute = GRID_START + Math.round((y/PX_PER_MIN)/15)*15;
   minute = Math.max(GRID_START, Math.min(minute, GRID_END-15));
 
-  const entries = gridEntriesCache[dateStr] || [];
+  let boundStart = GRID_START, boundEnd = GRID_END;
+  if(calendar==='infermiera'){
+    const nh = NURSE_HOURS[wd];
+    if(!nh) return; // giorno non disponibile per l'infermiera
+    if(minute < nh[0] || minute >= nh[1]) return; // fuori dalla fascia dell'infermiera
+    boundStart = nh[0]; boundEnd = nh[1];
+  }
+
+  const entries = gridEntriesCache[calendar+'|'+dateStr] || [];
   const insideReal = entries.some(e => e.type!=='block' && minute>=e.start && minute<e.start+e.duration);
   if(insideReal) return; // punto occupato da un appuntamento reale, ignora (si clicca l'appuntamento stesso per gestirlo)
 
-  const {segStart, segEnd} = computeStaffSegment(entries, minute);
+  const {segStart, segEnd} = computeStaffSegment(entries, minute, boundStart, boundEnd);
+
+  if(calendar==='infermiera'){
+    showModal(`
+      <h3>Nuovo appuntamento infermiera</h3>
+      <div class="sub">${DAY_NAMES[wd]}, circa ${fmtTime(minute)}</div>
+      <div class="actions">
+        <button class="btn-ghost" onclick="closeModal()">Annulla</button>
+        <button class="btn-primary" onclick="openNurseBooking('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Nuovo appuntamento</button>
+      </div>
+    `);
+    return;
+  }
 
   showModal(`
     <h3>Nuovo inserimento</h3>
@@ -803,9 +858,9 @@ function onGridColClick(event, dateStr, wd){
 // Calcola l'intervallo libero per lo staff attorno a un dato minuto, ignorando i blocchi
 // (i blocchi non impediscono a medico/segreteria di inserire un appuntamento; solo altri
 // appuntamenti reali — pazienti o impegni interni — lo impediscono).
-function computeStaffSegment(entries, minute){
+function computeStaffSegment(entries, minute, boundStart=GRID_START, boundEnd=GRID_END){
   const occ = entries.filter(e => e.type!=='block').sort((a,b)=>a.start-b.start);
-  let segStart = GRID_START, segEnd = GRID_END;
+  let segStart = boundStart, segEnd = boundEnd;
   for(const e of occ){
     if(e.start+e.duration <= minute) segStart = Math.max(segStart, e.start+e.duration);
     if(e.start >= minute){ segEnd = Math.min(segEnd, e.start); break; }
@@ -813,13 +868,14 @@ function computeStaffSegment(entries, minute){
   return {segStart, segEnd};
 }
 
-function onGridEntryClick(dateStr, start){
-  const entries = gridEntriesCache[dateStr] || [];
+function onGridEntryClick(dateStr, start, calendar){
+  calendar = calendar || 'medico';
+  const entries = gridEntriesCache[calendar+'|'+dateStr] || [];
   const e = entries.find(x => x.start===start);
   if(!e) return;
   const label = e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno');
   let extraBtn = '';
-  if(e.type==='block'){
+  if(e.type==='block' && calendar==='medico'){
     const {segStart, segEnd} = computeStaffSegment(entries, e.start);
     extraBtn = `<button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${e.start})">+ Appuntamento qui</button>`;
   }
@@ -831,12 +887,12 @@ function onGridEntryClick(dateStr, start){
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
       ${extraBtn}
-      <button class="btn-primary" style="background:var(--busy);" onclick="doRemoveEntry('${dateStr}', ${start})">Rimuovi</button>
+      <button class="btn-primary" style="background:var(--busy);" onclick="doRemoveEntry('${dateStr}', ${start}, '${calendar}')">Rimuovi</button>
     </div>
   `);
 }
 
-async function renderAdminMonth(container, year, month){
+async function renderAdminMonth(container, year, month, calendar='medico'){
   const first = new Date(year, month, 1);
   const last = new Date(year, month+1, 0);
   const startDate = getMonday(first);
@@ -852,7 +908,7 @@ async function renderAdminMonth(container, year, month){
   }
 
   const allDates = weeks.flat();
-  const entriesArr = await Promise.all(allDates.map(d => loadDayFull(fmtDateStr(d), d.getDay())));
+  const entriesArr = await Promise.all(allDates.map(d => loadDayFull(fmtDateStr(d), d.getDay(), calendar)));
   const entriesMap = {};
   allDates.forEach((d,i) => { entriesMap[fmtDateStr(d)] = entriesArr[i]; });
 
@@ -945,12 +1001,12 @@ async function confirmPatientBooking(dateStr, start){
   render();
 }
 
-function buildCancelLink(dateStr, start, email){
+function buildCancelLink(dateStr, start, email, calendar='medico'){
   const base = window.location.href.split('?')[0];
-  return `${base}?cancella=1&data=${dateStr}&ora=${start}&email=${encodeURIComponent(email)}`;
+  return `${base}?cancella=1&data=${dateStr}&ora=${start}&email=${encodeURIComponent(email)}&cal=${calendar}`;
 }
 
-function sendConfirmationEmail(dateStr, start, name, email){
+function sendConfirmationEmail(dateStr, start, name, email, calendar='medico', duration=PATIENT_DURATION){
   if(!EMAIL_CONFIGURED || !window.emailjs) return; // email non ancora configurata: nessun invio
   const [y,m,d] = dateStr.split('-').map(Number);
   const dateObj = new Date(y, m-1, d);
@@ -961,8 +1017,8 @@ function sendConfirmationEmail(dateStr, start, name, email){
     to_email: email,
     patient_name: name,
     appointment_date: dLabelCap,
-    appointment_time: `${fmtTime(start)} – ${fmtTime(start+PATIENT_DURATION)}`,
-    cancel_link: buildCancelLink(dateStr, start, email)
+    appointment_time: `${fmtTime(start)} – ${fmtTime(start+duration)}`,
+    cancel_link: buildCancelLink(dateStr, start, email, calendar)
   }).catch(err => console.error('Invio email non riuscito', err));
 }
 
@@ -982,13 +1038,21 @@ function sendCancellationEmail(dateStr, start, name, email){
 }
 
 /* ---- gestione link di annullamento arrivato via email ---- */
-function handleIncomingCancelLink(){
+async function handleIncomingCancelLink(){
   const params = new URLSearchParams(window.location.search);
   if(params.get('cancella') !== '1') return;
   const dateStr = params.get('data');
   const start = parseInt(params.get('ora'),10);
-  const email = params.get('email') || '';
+  const email = (params.get('email') || '').toLowerCase();
+  const calendar = params.get('cal') || 'medico';
   if(!dateStr || isNaN(start)) return;
+
+  const entries = await loadDay(dateStr, calendar);
+  const match = entries.find(e => e.start===start && e.type==='patient' && (e.email||'').toLowerCase()===email);
+  if(!match){
+    showModal(`<h3>Impossibile annullare</h3><div class="sub">Appuntamento non trovato (potrebbe essere già stato annullato).</div><div class="actions"><button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button></div>`);
+    return;
+  }
 
   const [y,m,d] = dateStr.split('-').map(Number);
   const dateObj = new Date(y, m-1, d);
@@ -996,23 +1060,23 @@ function handleIncomingCancelLink(){
 
   showModal(`
     <h3>Annullare questo appuntamento?</h3>
-    <div class="sub">${dLabel}, ore ${fmtTime(start)}–${fmtTime(start+PATIENT_DURATION)}</div>
+    <div class="sub">${dLabel}, ore ${fmtTime(start)}–${fmtTime(start+match.duration)}</div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">No, mantieni</button>
-      <button class="btn-primary" onclick="confirmPatientCancelDirect('${dateStr}', ${start}, '${email.replace(/'/g,"")}')">Sì, annulla appuntamento</button>
+      <button class="btn-primary" onclick="confirmPatientCancelDirect('${dateStr}', ${start}, '${email.replace(/'/g,"")}', '${calendar}')">Sì, annulla appuntamento</button>
     </div>
   `);
 }
-async function confirmPatientCancelDirect(dateStr, start, email){
-  let entries = await loadDay(dateStr);
+async function confirmPatientCancelDirect(dateStr, start, email, calendar='medico'){
+  let entries = await loadDay(dateStr, calendar);
   const match = entries.find(e => e.start===start && e.type==='patient' && (e.email||'').toLowerCase()===email.toLowerCase());
   if(!match){ showModal(`<h3>Impossibile annullare</h3><div class="sub">Appuntamento non trovato (potrebbe essere già stato annullato).</div><div class="actions"><button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button></div>`); return; }
-  await deleteEntry(dateStr, start);
+  await deleteEntry(dateStr, start, calendar);
   showModal(`<h3 style="color:var(--free);">✓ Appuntamento annullato</h3><div class="sub">Lo slot è stato liberato.</div><div class="actions"><button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button></div>`);
   render();
 }
 
-function showBookingConfirmation(dateStr, start){
+function showBookingConfirmation(dateStr, start, duration=PATIENT_DURATION){
   const [y,m,d] = dateStr.split('-').map(Number);
   const dateObj = new Date(y, m-1, d);
   const dLabel = dateObj.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'});
@@ -1022,7 +1086,7 @@ function showBookingConfirmation(dateStr, start){
     <div class="sub">Il tuo appuntamento è stato registrato.</div>
     <div style="background:var(--free-bg);border:1px solid var(--free);border-radius:8px;padding:14px 16px;margin-top:6px;">
       <div style="font-family:'Space Grotesk';font-size:17px;color:var(--teal-dark);">${dLabelCap}</div>
-      <div style="font-size:20px;font-weight:700;color:var(--teal-dark);margin-top:4px;">${fmtTime(start)} – ${fmtTime(start+PATIENT_DURATION)}</div>
+      <div style="font-size:20px;font-weight:700;color:var(--teal-dark);margin-top:4px;">${fmtTime(start)} – ${fmtTime(start+duration)}</div>
     </div>
     <div class="actions">
       <button class="btn-primary" style="flex:1" onclick="closeModal()">Chiudi</button>
@@ -1175,6 +1239,47 @@ async function confirmStaffBooking(dateStr, segStart, segEnd){
   render();
 }
 
+/* ---- prenotazione infermiera (prestazioni a durata fissa) ---- */
+function openNurseBooking(dateStr, segStart, segEnd, presetStart){
+  let startOptions = '';
+  for(let t=segStart; t<segEnd; t+=5){ const sel=(presetStart!==undefined && t===presetStart)?' selected':''; startOptions += `<option value="${t}"${sel}>${fmtTime(t)}</option>`; }
+  let serviceOptions = NURSE_SERVICES.map(s => `<option value="${s.id}">${s.label} (${s.duration} min)</option>`).join('');
+
+  showModal(`
+    <h3>Nuovo appuntamento infermiera</h3>
+    <div class="sub">Slot libero: ${fmtTime(segStart)}–${fmtTime(segEnd)}</div>
+    <label>Prestazione</label><select id="nuService">${serviceOptions}</select>
+    <label>Orario di inizio</label><select id="nuStart">${startOptions}</select>
+    <label>Nome e cognome paziente</label><input id="nuNome" type="text">
+    <label>Telefono (facoltativo)</label><input id="nuTel" type="tel">
+    <div class="err" id="nuErr"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Annulla</button>
+      <button class="btn-primary" onclick="confirmNurseBooking('${dateStr}', ${segEnd})">Salva</button>
+    </div>
+  `);
+}
+async function confirmNurseBooking(dateStr, segEnd){
+  const start = parseInt(document.getElementById('nuStart').value,10);
+  const serviceId = document.getElementById('nuService').value;
+  const service = NURSE_SERVICES.find(s => s.id===serviceId);
+  const nome = document.getElementById('nuNome').value.trim();
+  const tel = document.getElementById('nuTel').value.trim();
+  const err = document.getElementById('nuErr');
+
+  if(!nome){ err.textContent='Inserisci nome e cognome del paziente.'; err.style.display='block'; return; }
+  if(start+service.duration > segEnd){ err.textContent='La prestazione scelta supera lo slot libero disponibile.'; err.style.display='block'; return; }
+
+  const entries = await loadDay(dateStr, 'infermiera');
+  if(entries.some(e => e.type!=='block' && overlaps(start, service.duration, e.start, e.duration))){
+    err.textContent='Sovrapposizione con un altro appuntamento.'; err.style.display='block';
+    render(); return;
+  }
+  await insertEntry(dateStr, {start, duration:service.duration, type:'staff', name:`${service.label} — ${nome}`, phone:tel}, 'infermiera');
+  closeModal();
+  render();
+}
+
 /* ---- blocco slot con durata personalizzabile ---- */
 function openBlockForm(dateStr, segStart, segEnd, presetStart){
   const maxDur = segEnd - segStart;
@@ -1296,20 +1401,20 @@ async function submitMultiBlock(){
 }
 
 /* ---- rimozione ---- */
-function removeEntry(dateStr, start){
+function removeEntry(dateStr, start, calendar='medico'){
   showModal(`
     <h3>Rimuovere questo appuntamento?</h3>
     <div class="sub">L'operazione non può essere annullata.</div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
-      <button class="btn-primary" onclick="doRemoveEntry('${dateStr}', ${start})">Rimuovi</button>
+      <button class="btn-primary" onclick="doRemoveEntry('${dateStr}', ${start}, '${calendar}')">Rimuovi</button>
     </div>
   `);
 }
-async function doRemoveEntry(dateStr, start){
-  const entries = await loadDay(dateStr);
+async function doRemoveEntry(dateStr, start, calendar='medico'){
+  const entries = await loadDay(dateStr, calendar);
   const entry = entries.find(e => e.start === start);
-  await deleteEntry(dateStr, start);
+  await deleteEntry(dateStr, start, calendar);
   if(entry && entry.type === 'patient' && entry.email){
     sendCancellationEmail(dateStr, start, entry.name, entry.email);
   }
@@ -1368,6 +1473,9 @@ window.sendConfirmationEmail = sendConfirmationEmail;
 window.sendCancellationEmail = sendCancellationEmail;
 window.openStaffBooking = openStaffBooking;
 window.confirmStaffBooking = confirmStaffBooking;
+window.openNurseBooking = openNurseBooking;
+window.confirmNurseBooking = confirmNurseBooking;
+window.setAdminCalendar = setAdminCalendar;
 window.openBlockForm = openBlockForm;
 window.confirmBlock = confirmBlock;
 window.openMultiBlockModal = openMultiBlockModal;
@@ -1377,9 +1485,143 @@ window.doRemoveEntry = doRemoveEntry;
 window.openAnnouncementModal = openAnnouncementModal;
 window.submitAnnouncement = submitAnnouncement;
 
-render();
-initAnnouncement();
-handleIncomingCancelLink();
+/* ================== PAGINA DEDICATA PRENOTAZIONE VACCINAZIONE ================== */
+// Raggiungibile SOLO tramite il link speciale (?vaccino=1), mai dalla navigazione normale del sito.
+function isVaccineLinkMode(){
+  return new URLSearchParams(window.location.search).get('vaccino') === '1';
+}
+
+function getUpcomingNurseDays(count){
+  const days = [];
+  let cur = todayNormalized();
+  let safety = 0;
+  while(days.length < count && safety < 60){
+    if(NURSE_HOURS[cur.getDay()]) days.push(new Date(cur));
+    cur.setDate(cur.getDate()+1);
+    safety++;
+  }
+  return days;
+}
+
+async function renderVaccineBookingPage(){
+  // Nasconde tutto ciò che non serve in questa pagina dedicata
+  ['adminBtn','adminTabs','calendarSwitch','legendBlock'].forEach(id=>{
+    const el = document.getElementById(id); if(el) el.style.display='none';
+  });
+  document.querySelector('.info-card').style.display = 'none';
+  document.querySelector('.week-nav').style.display = 'none';
+  document.getElementById('announceBanner').style.display = 'none';
+  document.querySelector('.brand p').textContent = 'Prenota la tua vaccinazione';
+
+  const container = document.getElementById('daysContainer');
+  container.className = 'days';
+  container.innerHTML = '';
+
+  const intro = document.createElement('div');
+  intro.className = 'info-card';
+  intro.style.display = 'block';
+  intro.innerHTML = `<h3>Prenota la tua vaccinazione</h3><p>Seleziona un orario libero tra quelli disponibili con l'infermiera. L'appuntamento dura 5 minuti.</p>`;
+  container.parentNode.insertBefore(intro, container);
+
+  const days = getUpcomingNurseDays(6);
+  const todayStr = fmtDateStr(todayNormalized());
+
+  for(const date of days){
+    const wd = date.getDay();
+    const dateStr = fmtDateStr(date);
+    const entries = await loadDay(dateStr, 'infermiera');
+
+    const card = document.createElement('div');
+    card.className = 'day-card';
+    const dLabel = date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit',year:'numeric'});
+    const isToday = dateStr === todayStr;
+    card.innerHTML = `<div class="day-head"><div class="name">${DAY_NAMES[wd]}${isToday?' · Oggi':''}</div><div class="date">${dLabel}</div></div>
+                       <div class="slots" id="vslots-${dateStr}"></div>`;
+    container.appendChild(card);
+    renderVaccineDay(card.querySelector('.slots'), dateStr, wd, date, entries);
+  }
+}
+
+function renderVaccineDay(container, dateStr, wd, dateObj, entries){
+  const [start, end] = NURSE_HOURS[wd] || [null, null];
+  if(start===null){ container.innerHTML = '<div class="empty-note">Nessun orario disponibile.</div>'; return; }
+  const dur = VACCINE_SERVICE.duration;
+  const today = fmtDateStr(todayNormalized());
+  let any = false;
+  for(let t=start; t<end; t+=dur){
+    const occupied = entries.some(e => overlaps(t, dur, e.start, e.duration));
+    const isPast = (dateStr < today) || (dateStr===today && t <= nowMinutes());
+    const div = document.createElement('div');
+    if(occupied || isPast){
+      div.className = 'slot busy';
+      div.innerHTML = `<span class="t">${fmtTime(t)} – ${fmtTime(t+dur)}</span><span class="who">${isPast && !occupied ? 'Non più prenotabile' : 'Occupato'}</span>`;
+    } else {
+      div.className = 'slot free';
+      div.innerHTML = `<span class="t">${fmtTime(t)} – ${fmtTime(t+dur)}</span><span class="who">Libero — tocca per prenotare</span>`;
+      div.onclick = () => openVaccineBooking(dateStr, t, dateObj);
+    }
+    container.appendChild(div);
+    any = true;
+  }
+  if(!any) container.innerHTML = '<div class="empty-note">Nessun orario disponibile.</div>';
+}
+
+function openVaccineBooking(dateStr, start, dateObj){
+  const dLabel = dateObj.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'});
+  showModal(`
+    <h3>Prenota la vaccinazione</h3>
+    <div class="sub">${dLabel}, ore ${fmtTime(start)}–${fmtTime(start+VACCINE_SERVICE.duration)}</div>
+    <label>Nome</label><input id="vNome" type="text">
+    <label>Cognome</label><input id="vCognome" type="text">
+    <label>Telefono</label><input id="vTel" type="tel" oninput="liveValidate('vTel','vTelErr','phone')">
+    <div class="field-error" id="vTelErr">Numero di telefono non valido.</div>
+    <label>Email</label><input id="vEmail" type="email" oninput="liveValidate('vEmail','vEmailErr','email')">
+    <div class="field-error" id="vEmailErr">Indirizzo email non valido.</div>
+    <div class="err" id="vErr"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Annulla</button>
+      <button class="btn-primary" onclick="confirmVaccineBooking('${dateStr}', ${start})">Conferma</button>
+    </div>
+  `);
+}
+async function confirmVaccineBooking(dateStr, start){
+  const nome = document.getElementById('vNome').value.trim();
+  const cognome = document.getElementById('vCognome').value.trim();
+  const tel = document.getElementById('vTel').value.trim();
+  const email = document.getElementById('vEmail').value.trim();
+  const err = document.getElementById('vErr');
+  const dur = VACCINE_SERVICE.duration;
+
+  if(!nome || !cognome || !tel || !email){ err.textContent='Compila tutti i campi.'; err.style.display='block'; return; }
+  if(!isValidEmail(email)){ err.textContent='Inserisci un indirizzo email valido.'; err.style.display='block'; return; }
+  if(!isValidPhone(tel)){ err.textContent='Inserisci un numero di telefono valido.'; err.style.display='block'; return; }
+  if(await isPatientBlocked(email, tel)){
+    err.textContent='Non è possibile completare la prenotazione online. La preghiamo di contattare telefonicamente lo studio.';
+    err.style.display='block'; return;
+  }
+
+  const entries = await loadDay(dateStr, 'infermiera');
+  if(entries.some(e => overlaps(start, dur, e.start, e.duration))){
+    err.textContent='Questo orario è appena stato occupato. Scegli un altro slot.'; err.style.display='block';
+    renderVaccineBookingPage(); return;
+  }
+  await insertEntry(dateStr, {start, duration:dur, type:'patient', name:`${nome} ${cognome}`, phone:tel, email}, 'infermiera');
+  sendConfirmationEmail(dateStr, start, `${nome} ${cognome}`, email, 'infermiera', dur);
+  showBookingConfirmation(dateStr, start, dur);
+  await renderVaccineBookingPage();
+}
+
+window.confirmVaccineBooking = confirmVaccineBooking;
+
+/* ================== AVVIO ================== */
+if(isVaccineLinkMode()){
+  renderVaccineBookingPage();
+  handleIncomingCancelLink();
+} else {
+  render();
+  initAnnouncement();
+  handleIncomingCancelLink();
+}
 </script>
 </body>
 </html>
