@@ -128,6 +128,10 @@
   .slot.free:hover{border-color:var(--free);box-shadow:0 2px 8px rgba(21,162,74,.3);transform:translateY(-1px);}
   .slot.busy{background:var(--busy-bg);color:#A32318;border-color:rgba(226,59,46,.45);}
   .slot.block{background:var(--block-bg);color:#8A5A08;border-color:rgba(217,130,11,.4);}
+  .slot.pharma-free-slot{background:#D6ECFB;color:#0B4C7A;cursor:pointer;border-color:rgba(11,108,168,.4);}
+  .slot.pharma-free-slot:hover{border-color:#1D78B5;box-shadow:0 2px 8px rgba(11,108,168,.25);transform:translateY(-1px);}
+  .slot.pharma-busy-slot{background:#0B3C63;color:#fff;border-color:#062845;}
+  .slot.pharma-busy-slot .who{color:#fff;opacity:.85;}
   .slot .t{font-weight:600;}
   .slot .who{font-size:13px;opacity:.85;}
   .slot .label-eyebrow{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);font-weight:600;}
@@ -643,6 +647,7 @@ async function render(){
                          <div class="slots" id="slots-${dateStr}"></div>`;
       container.appendChild(card);
       renderPatientDay(card.querySelector('.slots'), dateStr, wd, date, entries);
+      renderPharmaSlot(card.querySelector('.slots'), dateStr, wd, date, entries);
     }
     return;
   }
@@ -699,6 +704,63 @@ function renderPatientDay(container, dateStr, wd, dateObj, entries){
     any = true;
   }
   if(!any) container.innerHTML = '<div class="empty-note">Nessun orario disponibile.</div>';
+}
+
+/* ---- slot pubblico per l'informatore farmaceutico (autoregistrazione) ---- */
+function renderPharmaSlot(container, dateStr, wd, dateObj, entries){
+  const blocks = RECURRING_BLOCKS[wd];
+  if(!blocks || !blocks.length) return;
+  const b = blocks[0];
+  const occupied = entries.some(e => !e.virtual && overlaps(b.start, b.duration, e.start, e.duration));
+  const today = fmtDateStr(todayNormalized());
+  const isPast = (dateStr < today) || (dateStr===today && b.start <= nowMinutes());
+
+  const div = document.createElement('div');
+  if(occupied || isPast){
+    div.className = 'slot pharma-busy-slot';
+    div.innerHTML = `<span class="t">${fmtTime(b.start)} – ${fmtTime(b.start+b.duration)}</span><span class="who">Informatore farmaceutico — ${isPast && !occupied ? 'Non più prenotabile' : 'Occupato'}</span>`;
+  } else {
+    div.className = 'slot pharma-free-slot';
+    div.innerHTML = `<span class="t">${fmtTime(b.start)} – ${fmtTime(b.start+b.duration)}</span><span class="who">Informatore farmaceutico — Libero, tocca per prenotare</span>`;
+    div.onclick = () => openPharmaBooking(dateStr, b.start, b.duration, dateObj);
+  }
+  container.insertBefore(div, container.firstChild);
+}
+
+function openPharmaBooking(dateStr, start, duration, dateObj){
+  const dLabel = dateObj.toLocaleDateString('it-IT',{weekday:'long',day:'numeric',month:'long'});
+  showModal(`
+    <h3>Prenota — Informatore farmaceutico</h3>
+    <div class="sub">${dLabel}, ore ${fmtTime(start)}–${fmtTime(start+duration)}</div>
+    <label>Nome e azienda rappresentata</label><input id="phNome" type="text" placeholder="Es. Mario Rossi — Azienda Farmaceutica">
+    <label>Telefono</label><input id="phTel" type="tel" oninput="liveValidate('phTel','phTelErr','phone')">
+    <div class="field-error" id="phTelErr">Numero di telefono non valido.</div>
+    <label>Email</label><input id="phEmail" type="email" oninput="liveValidate('phEmail','phEmailErr','email')">
+    <div class="field-error" id="phEmailErr">Indirizzo email non valido.</div>
+    <div class="err" id="phErr"></div>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Annulla</button>
+      <button class="btn-primary" onclick="confirmPharmaBooking('${dateStr}', ${start}, ${duration})">Conferma</button>
+    </div>
+  `);
+}
+async function confirmPharmaBooking(dateStr, start, duration){
+  const nome = document.getElementById('phNome').value.trim();
+  const tel = document.getElementById('phTel').value.trim();
+  const email = document.getElementById('phEmail').value.trim();
+  const err = document.getElementById('phErr');
+  if(!nome || !tel || !email){ err.textContent='Compila tutti i campi.'; err.style.display='block'; return; }
+  if(!isValidEmail(email)){ err.textContent='Inserisci un indirizzo email valido.'; err.style.display='block'; return; }
+  if(!isValidPhone(tel)){ err.textContent='Inserisci un numero di telefono valido.'; err.style.display='block'; return; }
+
+  const entries = await loadDay(dateStr);
+  if(entries.some(e => e.type!=='block' && overlaps(start, duration, e.start, e.duration))){
+    err.textContent='Questo orario è appena stato occupato. Riprova più tardi.'; err.style.display='block';
+    render(); return;
+  }
+  await insertEntry(dateStr, {start, duration, type:'staff', name:nome, phone:tel, email});
+  showBookingConfirmation(dateStr, start, duration);
+  render();
 }
 
 /* ---- vista staff: segmenti liberi/occupati, durata libera ---- */
@@ -1495,6 +1557,8 @@ window.openBlockedPatientsModal = openBlockedPatientsModal;
 window.submitBlockPatient = submitBlockPatient;
 window.removeBlockedPatient = removeBlockedPatient;
 window.openPatientBooking = openPatientBooking;
+window.openPharmaBooking = openPharmaBooking;
+window.confirmPharmaBooking = confirmPharmaBooking;
 window.confirmPatientBooking = confirmPatientBooking;
 window.liveValidate = liveValidate;
 window.showBookingConfirmation = showBookingConfirmation;
