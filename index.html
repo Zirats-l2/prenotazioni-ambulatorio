@@ -56,6 +56,16 @@
   .admin-toggle:hover{opacity:.92;}
 
   /* info card */
+  .announce-banner{
+    margin:22px 0 0;padding:14px 18px;border-radius:10px;display:flex;align-items:flex-start;gap:10px;
+    font-size:14px;line-height:1.5;
+  }
+  .announce-banner svg{flex:none;margin-top:1px;}
+  .announce-banner .a-title{font-weight:700;display:block;margin-bottom:2px;}
+  .announce-banner.info{background:#DCEAF5;color:#1D4E73;border:1px solid rgba(29,78,115,.3);}
+  .announce-banner.warning{background:var(--block-bg);color:#8A5A08;border:1px solid rgba(217,130,11,.35);}
+  .announce-banner.urgent{background:var(--busy-bg);color:#A32318;border:1px solid rgba(226,59,46,.45);}
+
   .info-card{
     background:#fff;border:1px solid var(--line);border-radius:var(--radius);
     padding:18px 20px;margin:22px 0 30px;position:relative;
@@ -220,11 +230,14 @@
       <svg class="pulse" viewBox="0 0 180 34"><path d="M0 17 H55 L65 5 L75 29 L85 17 H180"/></svg>
     </div>
     <div style="display:flex;gap:8px;">
+      <button class="admin-toggle" id="announceBtn" style="display:none;background:#1D4E73;" onclick="openAnnouncementModal()">Avviso pazienti</button>
       <button class="admin-toggle" id="multiBlockBtn" style="display:none;background:var(--teal-dark);" onclick="openMultiBlockModal()">Blocco su più giorni</button>
       <button class="admin-toggle" id="blockedUsersBtn" style="display:none;background:var(--block);" onclick="openBlockedPatientsModal()">Utenti bloccati</button>
       <button class="admin-toggle" id="adminBtn" onclick="openAdminModal()">Accesso medico/segreteria</button>
     </div>
   </header>
+
+  <div id="announceBanner" style="display:none;"></div>
 
   <div class="info-card">
     <h3>Informazioni per i pazienti</h3>
@@ -458,6 +471,87 @@ async function isPatientBlocked(email, phone){
   );
 }
 
+/* ---- avviso pazienti (banner + popup) ---- */
+let currentAnnouncement = null;
+let announcementPopupShown = false;
+const ANNOUNCE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+const ANNOUNCE_TYPE_LABEL = {info:'Informazione', warning:'Avviso', urgent:'Urgente'};
+
+async function loadAnnouncement(){
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/announcement?id=eq.1&select=*`, { headers: sbHeaders() });
+    if(!res.ok) return null;
+    const rows = await res.json();
+    return rows[0] || null;
+  }catch(e){ console.error('Errore caricamento avviso', e); return null; }
+}
+async function saveAnnouncement(message, type, active){
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/announcement?id=eq.1`, {
+      method:'PATCH',
+      headers: sbHeaders({'Content-Type':'application/json', Prefer:'return=minimal'}),
+      body: JSON.stringify({message, type, active, updated_at:new Date().toISOString()})
+    });
+  }catch(e){ console.error('Errore salvataggio avviso', e); }
+}
+
+function renderAnnouncementBanner(){
+  const el = document.getElementById('announceBanner');
+  if(!currentAnnouncement || !currentAnnouncement.active || !currentAnnouncement.message.trim()){
+    el.style.display = 'none';
+    return;
+  }
+  const type = currentAnnouncement.type || 'info';
+  el.className = 'announce-banner ' + type;
+  el.style.display = 'flex';
+  el.innerHTML = `${ANNOUNCE_ICON}<div><span class="a-title">${ANNOUNCE_TYPE_LABEL[type]||'Avviso'}</span>${currentAnnouncement.message}</div>`;
+}
+
+async function initAnnouncement(){
+  currentAnnouncement = await loadAnnouncement();
+  renderAnnouncementBanner();
+  if(currentAnnouncement && currentAnnouncement.active && currentAnnouncement.message.trim() && !announcementPopupShown){
+    announcementPopupShown = true;
+    const type = currentAnnouncement.type || 'info';
+    showModal(`
+      <h3>${ANNOUNCE_TYPE_LABEL[type]||'Avviso'}</h3>
+      <div class="sub" style="color:var(--ink);">${currentAnnouncement.message}</div>
+      <div class="actions"><button class="btn-primary" style="flex:1" onclick="closeModal()">Ho capito</button></div>
+    `);
+  }
+}
+
+function openAnnouncementModal(){
+  const a = currentAnnouncement || {message:'', type:'info', active:false};
+  showModal(`
+    <h3>Avviso per i pazienti</h3>
+    <div class="sub">Visibile come banner in cima al sito e come pop-up al primo accesso, finché è attivo.</div>
+    <label>Messaggio</label><input id="anMsg" type="text" value="${(a.message||'').replace(/"/g,'&quot;')}" placeholder="Es. Lo studio sarà chiuso il 15 agosto">
+    <label>Tipo</label>
+    <select id="anType">
+      <option value="info" ${a.type==='info'?'selected':''}>Informazione (blu)</option>
+      <option value="warning" ${a.type==='warning'?'selected':''}>Avviso (ambra)</option>
+      <option value="urgent" ${a.type==='urgent'?'selected':''}>Urgente (rosso)</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;">
+      <input id="anActive" type="checkbox" style="width:auto;" ${a.active?'checked':''}> Avviso attivo (visibile ai pazienti)
+    </label>
+    <div class="actions">
+      <button class="btn-ghost" onclick="closeModal()">Chiudi</button>
+      <button class="btn-primary" onclick="submitAnnouncement()">Salva</button>
+    </div>
+  `);
+}
+async function submitAnnouncement(){
+  const message = document.getElementById('anMsg').value.trim();
+  const type = document.getElementById('anType').value;
+  const active = document.getElementById('anActive').checked;
+  await saveAnnouncement(message, type, active);
+  currentAnnouncement = {message, type, active};
+  renderAnnouncementBanner();
+  closeModal();
+}
+
 /* ================== RENDER SETTIMANA ================== */
 async function render(){
   document.getElementById('legendBlock').style.display = isAdmin ? 'inline-flex' : 'none';
@@ -465,6 +559,7 @@ async function render(){
   document.getElementById('adminBtn').classList.toggle('active', isAdmin);
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('multiBlockBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('announceBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
@@ -1279,8 +1374,11 @@ window.openMultiBlockModal = openMultiBlockModal;
 window.submitMultiBlock = submitMultiBlock;
 window.removeEntry = removeEntry;
 window.doRemoveEntry = doRemoveEntry;
+window.openAnnouncementModal = openAnnouncementModal;
+window.submitAnnouncement = submitAnnouncement;
 
 render();
+initAnnouncement();
 handleIncomingCancelLink();
 </script>
 </body>
