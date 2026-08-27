@@ -183,6 +183,18 @@
   .tab-btn:hover:not(.active){background:var(--paper-2);}
 
   .hour-grid-wrap{display:flex;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow-x:auto;box-shadow:0 2px 10px rgba(38,36,32,0.05);}
+
+  /* Tema Calendario Medico (azzurro) vs Calendario Infermiera (rosa) */
+  .cal-medico .day-col-head, .cal-medico .axis-head-spacer, .cal-medico .hour-axis-col{background:#E3F1FC;color:#0B4C7A;}
+  .cal-medico .staff-band{background:rgba(11,108,168,.10);border-left-color:#1D78B5;}
+  .cal-infermiera .day-col-head, .cal-infermiera .axis-head-spacer, .cal-infermiera .hour-axis-col{background:#FCE4EE;color:#9C2159;}
+  .cal-infermiera .staff-band{background:rgba(214,51,132,.12);border-left-color:#D63384;}
+  .month-grid.cal-medico .month-cell{border-color:#BEDDF3;}
+  .month-grid.cal-medico .month-cell .mdate{color:#0B4C7A;}
+  .month-grid.cal-infermiera .month-cell{border-color:#F4C4DA;}
+  .month-grid.cal-infermiera .month-cell .mdate{color:#9C2159;}
+  #calendarSwitch .tab-btn[data-cal="medico"].active{background:#1D78B5;border-color:#1D78B5;}
+  #calendarSwitch .tab-btn[data-cal="infermiera"].active{background:#D63384;border-color:#D63384;}
   .hour-axis-col{flex:none;width:50px;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--paper-2);}
   .hour-axis{position:relative;flex:1;}
   .hour-axis .h-label{position:absolute;right:7px;transform:translateY(-50%);font-size:11px;color:var(--ink-soft);}
@@ -809,7 +821,7 @@ async function renderAdminGrid(container, dates, calendar='medico'){
     </div>`;
   });
 
-  container.innerHTML = `<div class="hour-grid-wrap"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`;
+  container.innerHTML = `<div class="hour-grid-wrap cal-${calendar}"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`;
 }
 
 function onGridColClick(event, dateStr, wd, calendar){
@@ -925,7 +937,7 @@ async function renderAdminMonth(container, year, month, calendar='medico'){
     </div>`;
   });
 
-  container.innerHTML = `<div class="month-grid">${headerHtml}${cellsHtml}</div>`;
+  container.innerHTML = `<div class="month-grid cal-${calendar}">${headerHtml}${cellsHtml}</div>`;
 }
 
 function goToDayFromMonth(dateStr){
