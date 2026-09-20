@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script src="https://www.google.com/recaptcha/api.js?onload=onRecaptchaApiLoad&render=explicit" async defer></script>
 <style>
   :root{
     --paper:#FAF6EF;
@@ -169,6 +170,7 @@
   }
   .modal input.invalid{border-color:var(--busy);box-shadow:0 0 0 3px rgba(226,59,46,.12);}
   .field-error{color:var(--busy);font-size:11.5px;margin-top:4px;display:none;}
+  .g-recaptcha-wrap{margin-top:14px;transform:scale(0.93);transform-origin:left top;}
   .modal .actions{display:flex;gap:8px;margin-top:18px;}
   .modal .actions button{flex:1;padding:10px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;border:none;}
   .btn-primary{background:var(--teal-dark);color:#fff;}
@@ -355,6 +357,29 @@ const EMAILJS_CANCEL_TEMPLATE_ID = "template_vmcrpe9";
 const EMAILJS_PUBLIC_KEY  = "9CzO19fkRxZMoHdwO";
 const EMAIL_CONFIGURED = !EMAILJS_SERVICE_ID.startsWith('INSERISCI');
 if(EMAIL_CONFIGURED && window.emailjs){ emailjs.init({publicKey: EMAILJS_PUBLIC_KEY}); }
+
+// MODIFICA QUI: chiave del sito ottenuta da google.com/recaptcha/admin
+const RECAPTCHA_SITE_KEY = "6LeraMUtAAAAAHfWMyjBwzswLz0cVABn3M5K8wUm";
+const RECAPTCHA_CONFIGURED = !RECAPTCHA_SITE_KEY.startsWith('INSERISCI');
+let recaptchaApiReady = false;
+function onRecaptchaApiLoad(){ recaptchaApiReady = true; }
+window.onRecaptchaApiLoad = onRecaptchaApiLoad;
+
+function renderCaptcha(containerId){
+  if(!RECAPTCHA_CONFIGURED) return;
+  const el = document.getElementById(containerId);
+  if(!el || el.dataset.rendered) return;
+  if(!window.grecaptcha || !recaptchaApiReady){ setTimeout(()=>renderCaptcha(containerId), 200); return; }
+  try{
+    grecaptcha.render(containerId, {sitekey: RECAPTCHA_SITE_KEY});
+    el.dataset.rendered = '1';
+  }catch(e){ console.error('Errore reCAPTCHA', e); }
+}
+function getCaptchaResponse(){
+  if(!RECAPTCHA_CONFIGURED) return 'not-configured';
+  if(!window.grecaptcha) return '';
+  try{ return grecaptcha.getResponse(); }catch(e){ return ''; }
+}
 
 /* ================== STATO ================== */
 let weekOffset = 0;
@@ -737,12 +762,14 @@ function openPharmaBooking(dateStr, start, duration, dateObj){
     <div class="field-error" id="phTelErr">Numero di telefono non valido.</div>
     <label>Email</label><input id="phEmail" type="email" oninput="liveValidate('phEmail','phEmailErr','email')">
     <div class="field-error" id="phEmailErr">Indirizzo email non valido.</div>
+    <div id="phCaptcha" class="g-recaptcha-wrap"></div>
     <div class="err" id="phErr"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
       <button class="btn-primary" onclick="confirmPharmaBooking('${dateStr}', ${start}, ${duration})">Conferma</button>
     </div>
   `);
+  renderCaptcha('phCaptcha');
 }
 async function confirmPharmaBooking(dateStr, start, duration){
   const nome = document.getElementById('phNome').value.trim();
@@ -752,6 +779,7 @@ async function confirmPharmaBooking(dateStr, start, duration){
   if(!nome || !tel || !email){ err.textContent='Compila tutti i campi.'; err.style.display='block'; return; }
   if(!isValidEmail(email)){ err.textContent='Inserisci un indirizzo email valido.'; err.style.display='block'; return; }
   if(!isValidPhone(tel)){ err.textContent='Inserisci un numero di telefono valido.'; err.style.display='block'; return; }
+  if(!getCaptchaResponse()){ err.textContent='Conferma di non essere un robot prima di continuare.'; err.style.display='block'; return; }
 
   const entries = await loadDay(dateStr);
   if(entries.some(e => e.type!=='block' && overlaps(start, duration, e.start, e.duration))){
@@ -1057,6 +1085,7 @@ function openPatientBooking(dateStr, start, dateObj){
     <div class="field-error" id="pTelErr">Numero di telefono non valido.</div>
     <label>Email</label><input id="pEmail" type="email" oninput="liveValidate('pEmail','pEmailErr','email')">
     <div class="field-error" id="pEmailErr">Indirizzo email non valido.</div>
+    <div id="pCaptcha" class="g-recaptcha-wrap"></div>
     <div class="err" id="pErr"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
@@ -1064,6 +1093,7 @@ function openPatientBooking(dateStr, start, dateObj){
     </div>
     <div class="note">Non inserire informazioni cliniche o mediche in questo modulo: solo nome, cognome, telefono ed email. L'email servirà per poter annullare l'appuntamento in autonomia, se necessario.</div>
   `);
+  renderCaptcha('pCaptcha');
 }
 async function confirmPatientBooking(dateStr, start){
   const nome = document.getElementById('pNome').value.trim();
@@ -1074,6 +1104,7 @@ async function confirmPatientBooking(dateStr, start){
   if(!nome || !cognome || !tel || !email){ err.textContent='Compila tutti i campi.'; err.style.display='block'; return; }
   if(!isValidEmail(email)){ err.textContent='Inserisci un indirizzo email valido.'; err.style.display='block'; return; }
   if(!isValidPhone(tel)){ err.textContent='Inserisci un numero di telefono valido.'; err.style.display='block'; return; }
+  if(!getCaptchaResponse()){ err.textContent='Conferma di non essere un robot prima di continuare.'; err.style.display='block'; return; }
 
   if(await isPatientBlocked(email, tel)){
     err.textContent='Non è possibile completare la prenotazione online. La preghiamo di contattare telefonicamente lo studio.';
@@ -1557,6 +1588,8 @@ window.openBlockedPatientsModal = openBlockedPatientsModal;
 window.submitBlockPatient = submitBlockPatient;
 window.removeBlockedPatient = removeBlockedPatient;
 window.openPatientBooking = openPatientBooking;
+window.renderCaptcha = renderCaptcha;
+window.getCaptchaResponse = getCaptchaResponse;
 window.openPharmaBooking = openPharmaBooking;
 window.confirmPharmaBooking = confirmPharmaBooking;
 window.confirmPatientBooking = confirmPatientBooking;
@@ -1673,12 +1706,14 @@ function openVaccineBooking(dateStr, start, dateObj){
     <div class="field-error" id="vTelErr">Numero di telefono non valido.</div>
     <label>Email</label><input id="vEmail" type="email" oninput="liveValidate('vEmail','vEmailErr','email')">
     <div class="field-error" id="vEmailErr">Indirizzo email non valido.</div>
+    <div id="vCaptcha" class="g-recaptcha-wrap"></div>
     <div class="err" id="vErr"></div>
     <div class="actions">
       <button class="btn-ghost" onclick="closeModal()">Annulla</button>
       <button class="btn-primary" onclick="confirmVaccineBooking('${dateStr}', ${start})">Conferma</button>
     </div>
   `);
+  renderCaptcha('vCaptcha');
 }
 async function confirmVaccineBooking(dateStr, start){
   const nome = document.getElementById('vNome').value.trim();
@@ -1691,6 +1726,7 @@ async function confirmVaccineBooking(dateStr, start){
   if(!nome || !cognome || !tel || !email){ err.textContent='Compila tutti i campi.'; err.style.display='block'; return; }
   if(!isValidEmail(email)){ err.textContent='Inserisci un indirizzo email valido.'; err.style.display='block'; return; }
   if(!isValidPhone(tel)){ err.textContent='Inserisci un numero di telefono valido.'; err.style.display='block'; return; }
+  if(!getCaptchaResponse()){ err.textContent='Conferma di non essere un robot prima di continuare.'; err.style.display='block'; return; }
   if(await isPatientBlocked(email, tel)){
     err.textContent='Non è possibile completare la prenotazione online. La preghiamo di contattare telefonicamente lo studio.';
     err.style.display='block'; return;
