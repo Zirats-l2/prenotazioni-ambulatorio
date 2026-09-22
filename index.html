@@ -1625,14 +1625,17 @@ function isVaccineLinkMode(){
   return new URLSearchParams(window.location.search).get('vaccino') === '1';
 }
 
-function getUpcomingNurseDays(count){
+// MODIFICA QUI: ultimo giorno prenotabile per la campagna vaccinale
+const VACCINE_CAMPAIGN_END = new Date(2026, 11, 17); // giovedì 17 dicembre 2026
+
+function getUpcomingNurseDays(){
   const days = [];
   let cur = todayNormalized();
-  let safety = 0;
-  while(days.length < count && safety < 60){
+  const end = new Date(VACCINE_CAMPAIGN_END);
+  end.setHours(23,59,59,999);
+  while(cur <= end){
     if(NURSE_HOURS[cur.getDay()]) days.push(new Date(cur));
     cur.setDate(cur.getDate()+1);
-    safety++;
   }
   return days;
 }
@@ -1654,10 +1657,10 @@ async function renderVaccineBookingPage(){
   const intro = document.createElement('div');
   intro.className = 'info-card';
   intro.style.display = 'block';
-  intro.innerHTML = `<h3>Prenota la tua vaccinazione</h3><p>Seleziona un orario libero tra quelli disponibili con l'infermiera. L'appuntamento dura 5 minuti.</p>`;
+  intro.innerHTML = `<h3>Prenota la tua vaccinazione</h3><p>Seleziona un orario libero tra quelli disponibili con l'infermiera. L'appuntamento dura 5 minuti. Prenotazioni disponibili fino a giovedì 17 dicembre 2026.</p>`;
   container.parentNode.insertBefore(intro, container);
 
-  const days = getUpcomingNurseDays(6);
+  const days = getUpcomingNurseDays();
   const todayStr = fmtDateStr(todayNormalized());
 
   for(const date of days){
