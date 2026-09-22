@@ -251,6 +251,10 @@
       <svg class="pulse" viewBox="0 0 180 34"><path d="M0 17 H55 L65 5 L75 29 L85 17 H180"/></svg>
     </div>
     <div style="display:flex;gap:8px;">
+      <a href="https://app.brevo.com" target="_blank" rel="noopener" class="admin-toggle" id="brevoBtn" style="display:none;background:#0092FF;text-decoration:none;align-items:center;gap:6px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 7 10-7"/></svg>
+        Brevo
+      </a>
       <button class="admin-toggle" id="announceBtn" style="display:none;background:#1D4E73;" onclick="openAnnouncementModal()">Avviso pazienti</button>
       <button class="admin-toggle" id="multiBlockBtn" style="display:none;background:var(--teal-dark);" onclick="openMultiBlockModal()">Blocco su più giorni</button>
       <button class="admin-toggle" id="blockedUsersBtn" style="display:none;background:var(--block);" onclick="openBlockedPatientsModal()">Utenti bloccati</button>
@@ -633,6 +637,7 @@ async function render(){
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('multiBlockBtn').style.display = (isAdmin && adminCalendar==='medico') ? 'inline-block' : 'none';
   document.getElementById('announceBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('brevoBtn').style.display = isAdmin ? 'inline-flex' : 'none';
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('calendarSwitch').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
