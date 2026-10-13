@@ -193,6 +193,28 @@
 
   .hour-grid-wrap{display:flex;border:1px solid var(--line);border-radius:var(--radius);background:#fff;overflow-x:auto;box-shadow:0 2px 10px rgba(38,36,32,0.05);}
 
+  /* Layout agenda: mini calendario a sinistra + griglia a destra */
+  .admin-layout{display:flex;gap:16px;align-items:flex-start;}
+  .admin-sidebar{flex:none;width:232px;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px;box-shadow:0 2px 10px rgba(38,36,32,0.05);position:sticky;top:12px;}
+  .admin-main{flex:1;min-width:0;}
+  .mc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .mc-head button{background:none;border:none;font-size:20px;line-height:1;cursor:pointer;color:var(--teal-dark);padding:2px 9px;border-radius:6px;}
+  .mc-head button:hover{background:var(--paper-2);}
+  .mc-title{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;color:var(--teal-dark);}
+  .mc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;}
+  .mc-wd{font-size:10.5px;color:var(--ink-soft);font-weight:700;padding:3px 0;}
+  .mc-day{font-size:12.5px;padding:7px 0;border-radius:8px;cursor:pointer;color:var(--ink);}
+  .mc-day:hover{background:var(--paper-2);}
+  .mc-day.other{color:#B9B2A4;}
+  .mc-day.selweek{background:rgba(15,118,110,.12);}
+  .mc-day.today:not(.sel){outline:2px solid var(--teal);outline-offset:-2px;font-weight:700;}
+  .mc-day.sel{background:var(--teal-dark);color:#fff;font-weight:700;border-radius:50%;}
+  .mc-hint{margin-top:8px;font-size:11px;color:var(--ink-soft);text-align:center;}
+  @media(max-width:899px){
+    .admin-layout{flex-direction:column;}
+    .admin-sidebar{width:100%;position:static;}
+  }
+
   /* Tema Calendario Medico (azzurro) vs Calendario Infermiera (rosa) */
   .cal-medico .day-col-head, .cal-medico .axis-head-spacer, .cal-medico .hour-axis-col{background:#E3F1FC;color:#0B4C7A;}
   .cal-medico .staff-band{background:rgba(11,108,168,.10);border-left-color:#1D78B5;}
@@ -392,8 +414,8 @@ function getCaptchaResponse(){
 let weekOffset = 0;
 let isAdmin = false;
 let adminViewMode = 'week'; // 'day' | 'week' | 'month'
-let adminDayOffset = 0;     // giorni feriali di distanza da oggi (vista Giorno)
-let adminMonthOffset = 0;   // mesi di distanza dal mese corrente (vista Mese)
+let adminDate = todayNormalized(); // data di riferimento per le viste Giorno / Settimana / Mese
+let miniCal = {year: adminDate.getFullYear(), month: adminDate.getMonth()}; // mese mostrato nel mini calendario laterale
 let adminCalendar = 'medico'; // 'medico' | 'infermiera'
 let gridEntriesCache = {};  // "calendario|dataStr" -> entries, popolato ad ogni render della griglia admin
 
@@ -690,18 +712,23 @@ async function render(){
   prevBtn.style.visibility = 'visible';
 
   if(adminViewMode === 'day'){
-    const date = addBusinessDays(nextOrSameWeekday(todayNormalized()), adminDayOffset);
+    const date = nextOrSameWeekday(adminDate);
     document.getElementById('weekLabel').textContent = capFirst(date.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'}));
     await renderAdminGrid(container, [date], adminCalendar);
   } else if(adminViewMode === 'month'){
-    const {year,month} = adminMonthYM();
+    const year = adminDate.getFullYear(), month = adminDate.getMonth();
     document.getElementById('weekLabel').textContent = capFirst(new Date(year,month,1).toLocaleDateString('it-IT',{month:'long', year:'numeric'}));
     await renderAdminMonth(container, year, month, adminCalendar);
   } else {
-    const dates = getWindowDates(weekOffset);
-    const opts = {day:'numeric', month:'long'};
-    document.getElementById('weekLabel').textContent =
-      dates[0].toLocaleDateString('it-IT',opts) + ' – ' + dates[4].toLocaleDateString('it-IT',opts);
+    // Settimana fissa da Lunedì a Venerdì, quella che contiene la data selezionata
+    const monday = getMonday(adminDate);
+    const dates = [];
+    for(let i=0;i<5;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); dates.push(d); }
+    const optsShort = {day:'numeric', month:'long'};
+    const optsFull = {day:'numeric', month:'long', year:'numeric'};
+    document.getElementById('weekLabel').textContent = (dates[0].getMonth()===dates[4].getMonth())
+      ? dates[0].getDate() + ' – ' + dates[4].toLocaleDateString('it-IT',optsFull)
+      : dates[0].toLocaleDateString('it-IT',optsShort) + ' – ' + dates[4].toLocaleDateString('it-IT',optsFull);
     await renderAdminGrid(container, dates, adminCalendar);
   }
 }
@@ -860,15 +887,6 @@ function layoutEntries(entries){
   });
 }
 
-function adminMonthYM(){
-  const now = new Date();
-  let month = now.getMonth() + adminMonthOffset;
-  let year = now.getFullYear();
-  while(month<0){ month+=12; year--; }
-  while(month>11){ month-=12; year++; }
-  return {year, month};
-}
-
 async function renderAdminGrid(container, dates, calendar='medico'){
   const HOURS = calendar==='infermiera' ? NURSE_HOURS : STAFF_HOURS;
   const cols = [];
@@ -933,7 +951,7 @@ async function renderAdminGrid(container, dates, calendar='medico'){
     </div>`;
   });
 
-  container.innerHTML = `<div class="hour-grid-wrap cal-${calendar}"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`;
+  setAdminContent(container, `<div class="hour-grid-wrap cal-${calendar}"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`);
 }
 
 function onGridColClick(event, dateStr, wd, calendar){
@@ -1053,22 +1071,78 @@ async function renderAdminMonth(container, year, month, calendar='medico'){
     </div>`;
   });
 
-  container.innerHTML = `<div class="month-grid cal-${calendar}">${headerHtml}${cellsHtml}</div>`;
+  setAdminContent(container, `<div class="month-grid cal-${calendar}">${headerHtml}${cellsHtml}</div>`);
 }
 
 function goToDayFromMonth(dateStr){
   const [y,m,d] = dateStr.split('-').map(Number);
-  const target = new Date(y, m-1, d);
-  const base = nextOrSameWeekday(todayNormalized());
-  let diff = 0, cur = new Date(base);
-  if(target >= base){
-    while(fmtDateStr(cur) !== dateStr){ cur.setDate(cur.getDate()+1); if(cur.getDay()!==0 && cur.getDay()!==6) diff++; }
-  } else {
-    while(fmtDateStr(cur) !== dateStr){ cur.setDate(cur.getDate()-1); if(cur.getDay()!==0 && cur.getDay()!==6) diff--; }
-  }
-  adminDayOffset = diff;
   adminViewMode = 'day';
+  setAdminDate(new Date(y, m-1, d));
+}
+
+/* ---- data di riferimento e mini calendario laterale ---- */
+function setAdminDate(d){
+  adminDate = new Date(d);
+  adminDate.setHours(0,0,0,0);
+  miniCal = {year: adminDate.getFullYear(), month: adminDate.getMonth()};
   render();
+}
+
+function setAdminContent(container, mainHtml){
+  container.innerHTML = `<div class="admin-layout"><aside class="admin-sidebar" id="miniCalWrap"></aside><div class="admin-main">${mainHtml}</div></div>`;
+  renderMiniCalendar();
+}
+
+function renderMiniCalendar(){
+  const el = document.getElementById('miniCalWrap');
+  if(!el) return;
+  const {year, month} = miniCal;
+  const first = new Date(year, month, 1);
+  const last = new Date(year, month+1, 0);
+  const todayStr = fmtDateStr(todayNormalized());
+  const selStr = fmtDateStr(adminDate);
+  const selMonday = getMonday(adminDate);
+  const selSunday = new Date(selMonday); selSunday.setDate(selMonday.getDate()+6);
+  const weekStartStr = fmtDateStr(selMonday), weekEndStr = fmtDateStr(selSunday);
+
+  let cells = '';
+  const cur = getMonday(first);
+  while(cur <= last){
+    for(let i=0;i<7;i++){
+      const d = new Date(cur); d.setDate(cur.getDate()+i);
+      const ds = fmtDateStr(d);
+      const cls = ['mc-day'];
+      if(d.getMonth()!==month) cls.push('other');
+      if(ds===todayStr) cls.push('today');
+      if(adminViewMode==='week' && ds>=weekStartStr && ds<=weekEndStr) cls.push('selweek');
+      if(ds===selStr) cls.push('sel');
+      cells += `<div class="${cls.join(' ')}" onclick="miniCalPick('${ds}')">${d.getDate()}</div>`;
+    }
+    cur.setDate(cur.getDate()+7);
+  }
+
+  el.innerHTML = `
+    <div class="mc-head">
+      <button onclick="miniCalNav(-1)" aria-label="Mese precedente">‹</button>
+      <div class="mc-title">${capFirst(first.toLocaleDateString('it-IT',{month:'long', year:'numeric'}))}</div>
+      <button onclick="miniCalNav(1)" aria-label="Mese successivo">›</button>
+    </div>
+    <div class="mc-grid">
+      ${['Lu','Ma','Me','Gi','Ve','Sa','Do'].map(n => `<div class="mc-wd">${n}</div>`).join('')}
+      ${cells}
+    </div>
+    <div class="mc-hint">Tocca un giorno per aprirlo</div>`;
+}
+function miniCalNav(dir){
+  let m = miniCal.month + dir, y = miniCal.year;
+  if(m<0){ m=11; y--; }
+  if(m>11){ m=0; y++; }
+  miniCal = {year:y, month:m};
+  renderMiniCalendar();
+}
+function miniCalPick(ds){
+  const [y,m,d] = ds.split('-').map(Number);
+  setAdminDate(new Date(y, m-1, d));
 }
 
 function setAdminViewMode(mode){ adminViewMode = mode; render(); }
@@ -1560,23 +1634,30 @@ function changeWeek(delta){
   if(!isAdmin && weekOffset+delta < 0) return;
   weekOffset += delta; render();
 }
+function shiftAdminDate(dir){
+  if(adminViewMode==='day'){
+    setAdminDate(addBusinessDays(nextOrSameWeekday(adminDate), dir));
+  } else if(adminViewMode==='month'){
+    const target = new Date(adminDate.getFullYear(), adminDate.getMonth()+dir, 1);
+    const lastDay = new Date(target.getFullYear(), target.getMonth()+1, 0).getDate();
+    target.setDate(Math.min(adminDate.getDate(), lastDay));
+    setAdminDate(target);
+  } else {
+    const d = new Date(adminDate); d.setDate(d.getDate() + 7*dir);
+    setAdminDate(d);
+  }
+}
 function navPrev(){
   if(!isAdmin){ changeWeek(-1); return; }
-  if(adminViewMode==='day') adminDayOffset -= 1;
-  else if(adminViewMode==='month') adminMonthOffset -= 1;
-  else weekOffset -= 1;
-  render();
+  shiftAdminDate(-1);
 }
 function navNext(){
   if(!isAdmin){ changeWeek(1); return; }
-  if(adminViewMode==='day') adminDayOffset += 1;
-  else if(adminViewMode==='month') adminMonthOffset += 1;
-  else weekOffset += 1;
-  render();
+  shiftAdminDate(1);
 }
 function navToday(){
-  adminDayOffset = 0; weekOffset = 0; adminMonthOffset = 0;
-  render();
+  weekOffset = 0;
+  setAdminDate(todayNormalized());
 }
 
 /* ================== ESPOSIZIONE GLOBALE ================== */
@@ -1585,6 +1666,8 @@ window.changeWeek = changeWeek;
 window.navPrev = navPrev;
 window.navNext = navNext;
 window.navToday = navToday;
+window.miniCalNav = miniCalNav;
+window.miniCalPick = miniCalPick;
 window.setAdminViewMode = setAdminViewMode;
 window.onGridColClick = onGridColClick;
 window.onGridEntryClick = onGridEntryClick;
