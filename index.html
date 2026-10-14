@@ -230,6 +230,22 @@
   .nurse-slot.hour .nl,.nurse-slot.quarter .nl{font-weight:700;color:#9C2159;}
   .nurse-slots .grid-entry{left:50px;right:3px;}
 
+  /* Griglia calendario medico: mattina o pomeriggio, slot da 15 minuti, orari di apertura evidenziati */
+  .doc-cols{display:flex;gap:8px;align-items:flex-start;overflow-x:auto;padding-bottom:2px;}
+  .doc-cols.single .doc-col{max-width:560px;}
+  .doc-col{flex:1;min-width:150px;background:#fff;border:1px solid #BEDDF3;border-radius:var(--radius);overflow:hidden;box-shadow:0 2px 10px rgba(38,36,32,0.05);}
+  .doc-col-head{padding:9px 6px;text-align:center;font-family:'Space Grotesk',sans-serif;font-size:13px;line-height:1.35;background:#E3F1FC;color:#0B4C7A;border-bottom:1px solid #BEDDF3;}
+  .doc-slots{position:relative;}
+  .doc-slot{display:flex;align-items:center;border-top:1px dotted rgba(29,120,181,.28);cursor:pointer;}
+  .doc-slot:first-child{border-top:none;}
+  .doc-slot.hour{border-top:1px solid rgba(29,120,181,.55);}
+  .doc-slot:first-child.hour{border-top:none;}
+  .doc-slot.open{background:rgba(11,108,168,.09);}
+  .doc-slot:hover:not(.taken){background:rgba(11,108,168,.20);}
+  .doc-slot .nl{width:46px;padding-left:8px;font-size:10.5px;color:var(--ink-soft);}
+  .doc-slot.hour .nl{font-weight:700;color:#0B4C7A;}
+  .doc-slot.open .nl{color:#0B4C7A;}
+
   /* Tema Calendario Medico (azzurro) vs Calendario Infermiera (rosa) */
   .cal-medico .day-col-head, .cal-medico .axis-head-spacer, .cal-medico .hour-axis-col{background:#E3F1FC;color:#0B4C7A;}
   .cal-medico .staff-band{background:rgba(11,108,168,.10);border-left-color:#1D78B5;}
@@ -978,50 +994,59 @@ function onNurseSlotClick(dateStr, t){
   openNurseBooking(dateStr, segStart, segEnd, t);
 }
 
-async function renderAdminGrid(container, dates, calendar='medico'){
-  if(calendar==='infermiera') return renderNurseGrid(container, dates);
-  const HOURS = calendar==='infermiera' ? NURSE_HOURS : STAFF_HOURS;
+// Fascia visibile e cliccabile del calendario del medico: mattina o pomeriggio, a seconda del giorno.
+// Dentro la fascia, gli orari di apertura dello studio (STAFF_HOURS) sono evidenziati.
+const DOCTOR_WINDOWS = {
+  1: [540, 840],   // Lun mattina     9:00–14:00
+  2: [900, 1200],  // Mar pomeriggio 15:00–20:00
+  3: [900, 1200],  // Mer pomeriggio 15:00–20:00
+  4: [540, 840],   // Gio mattina     9:00–14:00
+  5: [540, 840],   // Ven mattina     9:00–14:00
+};
+const DOC_SLOT = 15;                     // minuti per slot
+const DOC_ROW_H = DOC_SLOT * PX_PER_MIN; // altezza in pixel di uno slot da 15 minuti
+
+async function renderDoctorGrid(container, dates){
   const cols = [];
   for(const date of dates){
     const wd = date.getDay();
     const dateStr = fmtDateStr(date);
-    const entries = await loadDayFull(dateStr, wd, calendar);
-    gridEntriesCache[calendar+'|'+dateStr] = entries;
+    const entries = await loadDayFull(dateStr, wd, 'medico');
+    gridEntriesCache['medico|'+dateStr] = entries;
     cols.push({date, wd, dateStr, entries});
   }
-
-  const heightPx = (GRID_END-GRID_START)*PX_PER_MIN;
-  let axisHtml = `<div class="hour-axis-col"><div class="axis-head-spacer">&nbsp;<br>&nbsp;</div><div class="hour-axis" style="height:${heightPx}px;">`;
-  for(let h=GRID_START/60; h<=GRID_END/60; h++){
-    const tf = h===GRID_START/60 ? 'transform:none;margin-top:3px;'
-             : (h===GRID_END/60 ? 'transform:translateY(-100%);margin-top:-3px;' : '');
-    axisHtml += `<div class="h-label" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;${tf}">${h}:00</div>`;
-  }
-  axisHtml += `</div></div>`;
+  const todayStr = fmtDateStr(todayNormalized());
 
   let colsHtml = '';
   cols.forEach(c => {
-    const band = HOURS[c.wd];
-    const bandTitle = calendar==='infermiera' ? 'Orario disponibile infermiera' : 'Orario di apertura studio';
-    const bandHtml = band
-      ? `<div class="staff-band" style="top:${(band[0]-GRID_START)*PX_PER_MIN}px;height:${(band[1]-band[0])*PX_PER_MIN}px;" title="${bandTitle}"></div>`
-      : '';
-    let linesHtml = '';
-    for(let h=GRID_START/60; h<=GRID_END/60; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
+    const win = DOCTOR_WINDOWS[c.wd];
+    if(!win) return;
+    const [ws, we] = win;
+    const open = STAFF_HOURS[c.wd];
+
+    let rowsHtml = '';
+    for(let t=ws; t<we; t+=DOC_SLOT){
+      const real = c.entries.find(e => e.type!=='block' && t>=e.start && t<e.start+e.duration);
+      const isOpen = open && t>=open[0] && t<open[1];
+      const cls = 'doc-slot' + (t%60===0 ? ' hour' : '') + (isOpen ? ' open' : '') + (real ? ' taken' : '');
+      const handler = real
+        ? `onGridEntryClick('${c.dateStr}', ${real.start}, 'medico')`
+        : `onDoctorSlotClick('${c.dateStr}', ${c.wd}, ${t})`;
+      rowsHtml += `<div class="${cls}" style="height:${DOC_ROW_H}px;" onclick="${handler}"><span class="nl">${fmtTime(t)}</span></div>`;
+    }
 
     let entriesHtml = '';
-    // Nasconde il segnaposto "Informatore farmaceutico" quando è già stato prenotato da un appuntamento reale nello stesso orario
-    const visibleEntries = c.entries.filter(e =>
+    // Nasconde il segnaposto "Informatore farmaceutico" quando è già stato prenotato nello stesso orario
+    const shownEntries = c.entries.filter(e =>
       !(e.virtual && c.entries.some(o => !o.virtual && overlaps(e.start, e.duration, o.start, o.duration)))
     );
-    const laidOut = layoutEntries(visibleEntries);
-    laidOut.forEach(({entry:e, lane, totalLanes}) => {
+    layoutEntries(shownEntries).forEach(({entry:e, lane, totalLanes}) => {
       const eEnd = e.start + e.duration;
-      if(eEnd <= GRID_START || e.start >= GRID_END) return; // fuori dalla fascia visibile 9-20
-      const sC = Math.max(e.start, GRID_START), eC = Math.min(eEnd, GRID_END);
-      const top = (sC-GRID_START)*PX_PER_MIN;
+      if(eEnd <= ws || e.start >= we) return; // fuori dalla fascia visibile del giorno
+      const sC = Math.max(e.start, ws), eC = Math.min(eEnd, we);
+      const top = (sC-ws)*PX_PER_MIN;
       const h = Math.max((eC-sC)*PX_PER_MIN, 16);
-      const isPharma = calendar==='medico' && (RECURRING_BLOCKS[c.wd]||[]).some(b => overlaps(e.start, e.duration, b.start, b.duration));
+      const isPharma = (RECURRING_BLOCKS[c.wd]||[]).some(b => overlaps(e.start, e.duration, b.start, b.duration));
       let cls, label;
       if(isPharma){
         cls = e.virtual ? 'pharma-free' : 'pharma-busy';
@@ -1030,69 +1055,48 @@ async function renderAdminGrid(container, dates, calendar='medico'){
         cls = e.type==='patient' ? 'patient' : (e.type==='block' ? 'blockentry' : 'staffint');
         label = e.type==='patient' ? (e.name||'Paziente') : (e.type==='block' ? ('Bloccato'+(e.name?' — '+e.name:'')) : (e.name||'Interno'));
       }
-      const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start}, '${calendar}')"`;
-      const widthPct = 100/totalLanes;
-      const leftPct = lane*widthPct;
+      // Il segnaposto ricorrente non ha dettagli da mostrare: toccandolo si apre l'inserimento, come una riga libera
+      const clickAttr = e.virtual
+        ? ` onclick="onDoctorSlotClick('${c.dateStr}', ${c.wd}, ${e.start})"`
+        : ` onclick="onGridEntryClick('${c.dateStr}', ${e.start}, 'medico')"`;
       const inner = h < 40
         ? `<div class="gname"><b>${fmtTime(e.start)}</b> ${label}</div>`
         : `<div class="gname">${label}</div><div class="gtime">${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</div>`;
-      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + 3px);width:calc(${widthPct}% - 6px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">${inner}</div>`;
+      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(50px + ${lane} * (100% - 53px) / ${totalLanes});width:calc((100% - 53px) / ${totalLanes} - 2px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">${inner}</div>`;
     });
 
-    const isToday = c.dateStr === fmtDateStr(todayNormalized());
+    const isToday = c.dateStr === todayStr;
     const dLabel = c.date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
-    colsHtml += `<div class="day-col-wrap">
-      <div class="day-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel}</span></div>
-      <div class="day-col" style="height:${heightPx}px;" onclick="onGridColClick(event,'${c.dateStr}', ${c.wd}, '${calendar}')">
-        ${linesHtml}${bandHtml}${entriesHtml}
-      </div>
+    const openLabel = open ? ` · apertura ${fmtTime(open[0])}–${fmtTime(open[1])}` : '';
+    colsHtml += `<div class="doc-col">
+      <div class="doc-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel}${openLabel}</span></div>
+      <div class="doc-slots">${rowsHtml}${entriesHtml}</div>
     </div>`;
   });
 
-  setAdminContent(container, `<div class="hour-grid-wrap cal-${calendar}"><div style="display:flex;width:100%;">${axisHtml}<div class="day-columns">${colsHtml}</div></div></div>`);
+  setAdminContent(container, `<div class="doc-cols cal-medico${cols.length===1?' single':''}">${colsHtml}</div>`);
 }
 
-function onGridColClick(event, dateStr, wd, calendar){
-  calendar = calendar || 'medico';
-  const rect = event.currentTarget.getBoundingClientRect();
-  const y = event.clientY - rect.top;
-  let minute = GRID_START + Math.round((y/PX_PER_MIN)/15)*15;
-  minute = Math.max(GRID_START, Math.min(minute, GRID_END-15));
-
-  let boundStart = GRID_START, boundEnd = GRID_END;
-  if(calendar==='infermiera'){
-    const nh = NURSE_HOURS[wd];
-    if(!nh) return; // giorno non disponibile per l'infermiera
-    if(minute < nh[0] || minute >= nh[1]) return; // fuori dalla fascia dell'infermiera
-    boundStart = nh[0]; boundEnd = nh[1];
-  }
-
-  const entries = gridEntriesCache[calendar+'|'+dateStr] || [];
-  const insideReal = entries.some(e => e.type!=='block' && minute>=e.start && minute<e.start+e.duration);
-  if(insideReal) return; // punto occupato da un appuntamento reale, ignora (si clicca l'appuntamento stesso per gestirlo)
-
-  const {segStart, segEnd} = computeStaffSegment(entries, minute, boundStart, boundEnd);
-
-  if(calendar==='infermiera'){
-    showModal(`
-      <h3>Nuovo appuntamento infermiera</h3>
-      <div class="sub">${DAY_NAMES[wd]}, circa ${fmtTime(minute)}</div>
-      <div class="actions">
-        <button class="btn-ghost" onclick="closeModal()">Annulla</button>
-        <button class="btn-primary" onclick="openNurseBooking('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Nuovo appuntamento</button>
-      </div>
-    `);
-    return;
-  }
-
+function onDoctorSlotClick(dateStr, wd, t){
+  const w = DOCTOR_WINDOWS[wd];
+  if(!w) return;
+  const entries = gridEntriesCache['medico|'+dateStr] || [];
+  if(entries.some(e => e.type!=='block' && t>=e.start && t<e.start+e.duration)) return; // occupato da un appuntamento reale
+  // I blocchi non impediscono a medico/segreteria di inserire un appuntamento
+  const {segStart, segEnd} = computeStaffSegment(entries, t, w[0], w[1]);
   showModal(`
     <h3>Nuovo inserimento</h3>
-    <div class="sub">${DAY_NAMES[wd]}, circa ${fmtTime(minute)}</div>
+    <div class="sub">${DAY_NAMES[wd]}, ore ${fmtTime(t)}</div>
     <div class="actions">
-      <button class="btn-ghost" onclick="openBlockForm('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Blocca orario</button>
-      <button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${minute})">Nuovo appuntamento</button>
+      <button class="btn-ghost" onclick="openBlockForm('${dateStr}', ${segStart}, ${segEnd}, ${t})">Blocca orario</button>
+      <button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${t})">Nuovo appuntamento</button>
     </div>
   `);
+}
+
+async function renderAdminGrid(container, dates, calendar='medico'){
+  if(calendar==='infermiera') return renderNurseGrid(container, dates);
+  return renderDoctorGrid(container, dates);
 }
 
 // Calcola l'intervallo libero per lo staff attorno a un dato minuto, ignorando i blocchi
@@ -1119,7 +1123,8 @@ function onGridEntryClick(dateStr, start, calendar){
   const label = isPharma ? 'Informatore farmaceutico' : (e.type==='patient' ? 'Paziente' : (e.type==='block' ? 'Bloccato' : 'Impegno interno'));
   let extraBtn = '';
   if(e.type==='block' && calendar==='medico'){
-    const {segStart, segEnd} = computeStaffSegment(entries, e.start);
+    const dw = DOCTOR_WINDOWS[wd] || [GRID_START, GRID_END];
+    const {segStart, segEnd} = computeStaffSegment(entries, e.start, dw[0], dw[1]);
     extraBtn = `<button class="btn-primary" onclick="openStaffBooking('${dateStr}', ${segStart}, ${segEnd}, ${e.start})">+ Appuntamento qui</button>`;
   }
   showModal(`
@@ -1771,7 +1776,7 @@ window.miniCalNav = miniCalNav;
 window.miniCalPick = miniCalPick;
 window.onNurseSlotClick = onNurseSlotClick;
 window.setAdminViewMode = setAdminViewMode;
-window.onGridColClick = onGridColClick;
+window.onDoctorSlotClick = onDoctorSlotClick;
 window.onGridEntryClick = onGridEntryClick;
 window.goToDayFromMonth = goToDayFromMonth;
 window.openAdminModal = openAdminModal;
