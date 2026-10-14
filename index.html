@@ -1338,7 +1338,8 @@ async function renderVaccineStock(){
   if(!vaccineStockLoaded) await loadVaccineStock();
   const date = nurseDayOnOrAfter(adminDate);
   const dateStr = fmtDateStr(date);
-  const booked = await countVaccinesBooked(dateStr);
+  const nextDay = new Date(date); nextDay.setDate(nextDay.getDate()+1);
+  const booked = await countVaccinesBooked(fmtDateStr(nextDay)); // prenotazioni dei giorni successivi, fino a fine gennaio
   const total = vaccineStock.total;
   const done = (vaccineStock.done[dateStr]===undefined) ? null : vaccineStock.done[dateStr];
   const fmtLeft = v => {
@@ -1356,7 +1357,7 @@ async function renderVaccineStock(){
     <label class="vs-row"><span>Vaccinazioni fatte nella giornata (da inserire a fine turno)</span>
       <input type="number" min="0" inputmode="numeric" value="${done===null?'':done}" placeholder="–" onchange="saveVaccineDone('${dateStr}', this.value)"></label>
     <div class="vs-row"><span>Dosi realmente rimaste</span>${fmtLeft(done)}</div>
-    <div class="vs-row"><span>Dosi rimaste in base a tutte le prenotazioni da questo giorno a fine gennaio (${booked} prenotate)</span>${fmtLeft(booked)}</div>
+    <div class="vs-row"><span>Dosi che resteranno dopo tutte le prenotazioni dei giorni successivi fino a fine gennaio (${booked} prenotate)</span>${fmtLeft(done===null ? null : done+booked)}</div>
   `;
 }
 
