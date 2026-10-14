@@ -308,6 +308,15 @@
     .print-day th,.print-day td{border:1px solid #888;padding:7px 9px;text-align:left;}
     .print-day th{background:#eee;}
   }
+
+  .vs-box:empty{display:none;}
+  .vs-box{margin-top:14px;padding:12px;border:1px solid rgba(157,58,107,.35);border-radius:10px;background:#FBF1F6;font-size:13px;}
+  .vs-title{font-weight:700;color:#7A2B53;font-size:14px;}
+  .vs-day{font-size:12px;color:var(--ink-soft);margin-bottom:8px;}
+  .vs-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid rgba(157,58,107,.18);}
+  .vs-row span{flex:1;line-height:1.25;}
+  .vs-row input{width:70px;padding:5px 6px;font-size:14px;text-align:right;border:1px solid #C9A0B8;border-radius:6px;}
+  .vs-row b{font-size:16px;}
 </style>
 </head>
 <body>
@@ -1243,6 +1252,97 @@ function setAdminDate(d){
   render();
 }
 
+
+/* ---- contatore vaccini a magazzino (riquadro sotto il calendario mensile, solo calendario infermiera) ---- */
+// Dati: dosi totali + vaccinazioni effettivamente fatte, inserite a mano dall'infermiera giorno per giorno
+let vaccineStock = {total:null, done:{}};
+let vaccineStockLoaded = false;
+const STOCK_LS_KEY = 'vaccineStockData';
+
+function parseStock(s){
+  const out = {total:null, done:{}};
+  if(s===null || s===undefined || s==='') return out;
+  try{
+    const o = JSON.parse(s);
+    if(o && typeof o==='object'){
+      if(o.total!==null && o.total!==undefined && !isNaN(parseInt(o.total,10))) out.total = parseInt(o.total,10);
+      if(o.done && typeof o.done==='object') out.done = o.done;
+      return out;
+    }
+    if(typeof o==='number') out.total = o;
+  }catch(e){}
+  return out;
+}
+async function loadVaccineStock(){
+  // Prova prima il database (condiviso fra tutti i dispositivi), poi la memoria del dispositivo
+  try{
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/announcement?id=eq.2&select=message`, { headers: sbHeaders() });
+    if(res.ok){
+      const rows = await res.json();
+      if(rows[0] && rows[0].message){
+        vaccineStock = parseStock(rows[0].message);
+        try{ localStorage.setItem(STOCK_LS_KEY, JSON.stringify(vaccineStock)); }catch(e){}
+        vaccineStockLoaded = true; return;
+      }
+    }
+  }catch(e){}
+  try{ vaccineStock = parseStock(localStorage.getItem(STOCK_LS_KEY)); }catch(e){}
+  vaccineStockLoaded = true;
+}
+async function persistVaccineStock(){
+  try{ localStorage.setItem(STOCK_LS_KEY, JSON.stringify(vaccineStock)); }catch(e){}
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/announcement`, {
+      method:'POST',
+      headers: sbHeaders({'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal'}),
+      body: JSON.stringify({id:2, message: JSON.stringify(vaccineStock), type:'info', active:false, show_vaccine_link:false, updated_at:new Date().toISOString()})
+    });
+  }catch(e){ console.error('Errore salvataggio magazzino vaccini', e); }
+}
+async function saveVaccineTotal(raw){
+  const n = parseInt(raw,10);
+  vaccineStock.total = isNaN(n) ? null : Math.max(0,n);
+  await persistVaccineStock();
+  renderVaccineStock();
+}
+async function saveVaccineDone(dateStr, raw){
+  const n = parseInt(raw,10);
+  if(isNaN(n)) delete vaccineStock.done[dateStr]; else vaccineStock.done[dateStr] = Math.max(0,n);
+  await persistVaccineStock();
+  renderVaccineStock();
+}
+function isVaccineEntry(e){
+  return e.type!=='block' && (e.type==='patient' || String(e.name||'').startsWith('Vaccinazione'));
+}
+async function renderVaccineStock(){
+  const box = document.getElementById('vaccineStockBox');
+  if(!box) return;
+  if(!isAdmin || adminCalendar!=='infermiera'){ box.innerHTML=''; return; }
+  if(!vaccineStockLoaded) await loadVaccineStock();
+  const date = nurseDayOnOrAfter(adminDate);
+  const dateStr = fmtDateStr(date);
+  const booked = (await loadDay(dateStr, 'infermiera')).filter(isVaccineEntry).length;
+  const total = vaccineStock.total;
+  const done = (vaccineStock.done[dateStr]===undefined) ? null : vaccineStock.done[dateStr];
+  const fmtLeft = v => {
+    if(total===null || v===null) return '–';
+    const r = total - v;
+    return `<b style="color:${r<0?'#B3261E':(r<=10?'#B26A00':'#1D4E73')};">${r}</b>`;
+  };
+  const el2 = document.getElementById('vaccineStockBox'); // il riquadro potrebbe essere stato ridisegnato nel frattempo
+  if(!el2) return;
+  el2.innerHTML = `
+    <div class="vs-title">Vaccini a magazzino</div>
+    <div class="vs-day">${capFirst(date.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long'}))}</div>
+    <label class="vs-row"><span>Dosi totali in magazzino</span>
+      <input type="number" min="0" inputmode="numeric" value="${total===null?'':total}" placeholder="0" onchange="saveVaccineTotal(this.value)"></label>
+    <label class="vs-row"><span>Vaccinazioni fatte nella giornata (da inserire a fine turno)</span>
+      <input type="number" min="0" inputmode="numeric" value="${done===null?'':done}" placeholder="–" onchange="saveVaccineDone('${dateStr}', this.value)"></label>
+    <div class="vs-row"><span>Dosi realmente rimaste</span>${fmtLeft(done)}</div>
+    <div class="vs-row"><span>Dosi rimaste in base alle prenotazioni (${booked})</span>${fmtLeft(booked)}</div>
+  `;
+}
+
 function setAdminContent(container, mainHtml){
   container.innerHTML = `<div class="admin-layout"><aside class="admin-sidebar" id="miniCalWrap"></aside><div class="admin-main">${mainHtml}</div></div>`;
   renderMiniCalendar();
@@ -1286,7 +1386,10 @@ function renderMiniCalendar(){
       ${['Lu','Ma','Me','Gi','Ve','Sa','Do'].map(n => `<div class="mc-wd">${n}</div>`).join('')}
       ${cells}
     </div>
-    <div class="mc-hint">Tocca un giorno per aprirlo</div>`;
+    <div class="mc-hint">Tocca un giorno per aprirlo</div>
+    <div id="vaccineStockBox" class="vs-box"></div>
+  `;
+  renderVaccineStock();
 }
 function miniCalNav(dir){
   let m = miniCal.month + dir, y = miniCal.year;
@@ -1854,6 +1957,8 @@ window.openNurseBooking = openNurseBooking;
 window.confirmNurseBooking = confirmNurseBooking;
 window.setAdminCalendar = setAdminCalendar;
 window.printNurseDay = printNurseDay;
+window.saveVaccineTotal = saveVaccineTotal;
+window.saveVaccineDone = saveVaccineDone;
 window.openBlockForm = openBlockForm;
 window.confirmBlock = confirmBlock;
 window.openMultiBlockModal = openMultiBlockModal;
