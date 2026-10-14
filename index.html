@@ -304,7 +304,7 @@
 
   <div id="announceBanner" style="display:none;"></div>
 
-  <div class="info-card">
+  <div class="info-card" id="patientInfoCard">
     <h3>Informazioni per i pazienti</h3>
     <!-- MODIFICA QUI: cambia liberamente questi testi con le informazioni del tuo studio -->
     <p><strong>Indirizzo:</strong> Via Toti 19, Brescia
@@ -434,9 +434,9 @@ let miniCal = {year: adminDate.getFullYear(), month: adminDate.getMonth()}; // m
 let adminCalendar = 'medico'; // 'medico' | 'infermiera'
 let gridEntriesCache = {};  // "calendario|dataStr" -> entries, popolato ad ogni render della griglia admin
 
-const GRID_START = 480; // 8:00 in minuti
+const GRID_START = 540; // 9:00 in minuti
 const GRID_END = 1200;  // 20:00 in minuti
-const PX_PER_MIN = 1;    // 1 minuto = 1px (12 ore = 720px)
+const PX_PER_MIN = 2;    // 1 minuto = 2px (1 ora = 120px): più spazio per inserire le visite
 
 /* ================== UTILITA' ================== */
 function pad(n){return n.toString().padStart(2,'0');}
@@ -681,6 +681,7 @@ async function render(){
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('calendarSwitch').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('todayBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('patientInfoCard').style.display = isAdmin ? 'none' : '';
   document.querySelectorAll('#adminTabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.mode===adminViewMode));
   document.querySelectorAll('#calendarSwitch .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.cal===adminCalendar));
 
@@ -991,8 +992,10 @@ async function renderAdminGrid(container, dates, calendar='medico'){
 
   const heightPx = (GRID_END-GRID_START)*PX_PER_MIN;
   let axisHtml = `<div class="hour-axis-col"><div class="axis-head-spacer">&nbsp;<br>&nbsp;</div><div class="hour-axis" style="height:${heightPx}px;">`;
-  for(let h=8; h<=20; h++){
-    axisHtml += `<div class="h-label" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;">${h}:00</div>`;
+  for(let h=GRID_START/60; h<=GRID_END/60; h++){
+    const tf = h===GRID_START/60 ? 'transform:none;margin-top:3px;'
+             : (h===GRID_END/60 ? 'transform:translateY(-100%);margin-top:-3px;' : '');
+    axisHtml += `<div class="h-label" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;${tf}">${h}:00</div>`;
   }
   axisHtml += `</div></div>`;
 
@@ -1004,7 +1007,7 @@ async function renderAdminGrid(container, dates, calendar='medico'){
       ? `<div class="staff-band" style="top:${(band[0]-GRID_START)*PX_PER_MIN}px;height:${(band[1]-band[0])*PX_PER_MIN}px;" title="${bandTitle}"></div>`
       : '';
     let linesHtml = '';
-    for(let h=8; h<=20; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
+    for(let h=GRID_START/60; h<=GRID_END/60; h++){ linesHtml += `<div class="hour-line" style="top:${(h*60-GRID_START)*PX_PER_MIN}px;"></div>`; }
 
     let entriesHtml = '';
     // Nasconde il segnaposto "Informatore farmaceutico" quando è già stato prenotato da un appuntamento reale nello stesso orario
@@ -1013,8 +1016,11 @@ async function renderAdminGrid(container, dates, calendar='medico'){
     );
     const laidOut = layoutEntries(visibleEntries);
     laidOut.forEach(({entry:e, lane, totalLanes}) => {
-      const top = (e.start-GRID_START)*PX_PER_MIN;
-      const h = Math.max(e.duration*PX_PER_MIN, 16);
+      const eEnd = e.start + e.duration;
+      if(eEnd <= GRID_START || e.start >= GRID_END) return; // fuori dalla fascia visibile 9-20
+      const sC = Math.max(e.start, GRID_START), eC = Math.min(eEnd, GRID_END);
+      const top = (sC-GRID_START)*PX_PER_MIN;
+      const h = Math.max((eC-sC)*PX_PER_MIN, 16);
       const isPharma = calendar==='medico' && (RECURRING_BLOCKS[c.wd]||[]).some(b => overlaps(e.start, e.duration, b.start, b.duration));
       let cls, label;
       if(isPharma){
@@ -1027,9 +1033,10 @@ async function renderAdminGrid(container, dates, calendar='medico'){
       const clickAttr = e.virtual ? '' : ` onclick="event.stopPropagation(); onGridEntryClick('${c.dateStr}', ${e.start}, '${calendar}')"`;
       const widthPct = 100/totalLanes;
       const leftPct = lane*widthPct;
-      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + 3px);width:calc(${widthPct}% - 6px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">
-        <div class="gname">${label}</div><div class="gtime">${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</div>
-      </div>`;
+      const inner = h < 40
+        ? `<div class="gname"><b>${fmtTime(e.start)}</b> ${label}</div>`
+        : `<div class="gname">${label}</div><div class="gtime">${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</div>`;
+      entriesHtml += `<div class="grid-entry ${cls}" style="top:${top}px;height:${h}px;left:calc(${leftPct}% + 3px);width:calc(${widthPct}% - 6px);right:auto;"${clickAttr} title="${label}, ${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}">${inner}</div>`;
     });
 
     const isToday = c.dateStr === fmtDateStr(todayNormalized());
@@ -1619,7 +1626,7 @@ async function confirmBlock(dateStr, segEnd){
 function openMultiBlockModal(){
   const todayStr = fmtDateStr(todayNormalized());
   let startTimeOptions = '';
-  for(let t=420; t<1260; t+=15){ startTimeOptions += `<option value="${t}" ${t===480?'selected':''}>${fmtTime(t)}</option>`; }
+  for(let t=GRID_START; t<GRID_END; t+=15){ startTimeOptions += `<option value="${t}" ${t===GRID_START?'selected':''}>${fmtTime(t)}</option>`; }
   let durOptions = '';
   [15,30,45,60,90,120,180,240,300,360,420,480].forEach(d=>{ durOptions += `<option value="${d}" ${d===120?'selected':''}>${d>=60 ? (d/60)+'h'+(d%60?(' '+(d%60)+'min'):'') : d+' min'}</option>`; });
 
