@@ -295,6 +295,19 @@
   .month-cell .mcount{font-size:11px;color:var(--busy);margin-top:4px;}
   .nav-today-btn{background:none;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:13px;cursor:pointer;color:var(--teal-dark);font-weight:600;font-family:'Manrope';}
   .nav-today-btn:hover{background:var(--paper-2);}
+
+  #printArea{display:none;}
+  @media print{
+    body > *:not(#printArea){display:none !important;}
+    #printArea{display:block !important;font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;}
+    .print-day{page-break-after:always;}
+    .print-day:last-child{page-break-after:auto;}
+    .print-day h2{font-size:20px;margin:0 0 4px;}
+    .print-sub{font-size:12px;color:#444;margin-bottom:12px;}
+    .print-day table{width:100%;border-collapse:collapse;font-size:14px;}
+    .print-day th,.print-day td{border:1px solid #888;padding:7px 9px;text-align:left;}
+    .print-day th{background:#eee;}
+  }
 </style>
 </head>
 <body>
@@ -312,6 +325,7 @@
         Brevo
       </a>
       <button class="admin-toggle" id="announceBtn" style="display:none;background:#1D4E73;" onclick="openAnnouncementModal()">Avviso pazienti</button>
+      <button class="admin-toggle" id="printNurseBtn" style="display:none;background:#9D3A6B;" onclick="printNurseDay()">Stampa elenco del giorno</button>
       <button class="admin-toggle" id="multiBlockBtn" style="display:none;background:var(--teal-dark);" onclick="openMultiBlockModal()">Blocco su più giorni</button>
       <button class="admin-toggle" id="blockedUsersBtn" style="display:none;background:var(--block);" onclick="openBlockedPatientsModal()">Utenti bloccati</button>
       <button class="admin-toggle" id="adminBtn" onclick="openAdminModal()">Accesso medico/segreteria</button>
@@ -406,7 +420,7 @@ const RECURRING_BLOCKS = {
   4: [{start:600, duration:15, label:'Informatore farmaceutico'}], // Gio 10:00–10:15
   5: [{start:600, duration:15, label:'Informatore farmaceutico'}], // Ven 10:00–10:15
 };
-const ADMIN_PIN = "1234"; // <-- cambia questo PIN
+const ADMIN_PIN = "180182"; // <-- cambia questo PIN
 
 // MODIFICA QUI: incolla qui i 3 codici ottenuti da emailjs.com per attivare le email automatiche.
 // Finché restano "INSERISCI..." le email non verranno inviate (il resto del sito funziona comunque).
@@ -693,6 +707,7 @@ async function render(){
   document.getElementById('blockedUsersBtn').style.display = isAdmin ? 'inline-block' : 'none';
   document.getElementById('multiBlockBtn').style.display = (isAdmin && adminCalendar==='medico') ? 'inline-block' : 'none';
   document.getElementById('announceBtn').style.display = isAdmin ? 'inline-block' : 'none';
+  document.getElementById('printNurseBtn').style.display = (isAdmin && adminCalendar==='infermiera' && adminViewMode!=='month') ? 'inline-block' : 'none';
   document.getElementById('brevoBtn').style.display = isAdmin ? 'inline-flex' : 'none';
   document.getElementById('adminTabs').style.display = isAdmin ? 'flex' : 'none';
   document.getElementById('calendarSwitch').style.display = isAdmin ? 'flex' : 'none';
@@ -983,6 +998,41 @@ async function renderNurseGrid(container, dates){
   });
 
   setAdminContent(container, `<div class="nurse-cols cal-infermiera${cols.length===1?' single':''}">${colsHtml}</div>`);
+}
+
+
+/* ---- stampa elenco appuntamenti dell'infermiera ---- */
+async function printNurseDay(){
+  let dates;
+  if(adminViewMode==='week'){
+    const monday = getMonday(adminDate);
+    dates = [];
+    for(let i=0;i<5;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); if(NURSE_HOURS[d.getDay()]) dates.push(d); }
+  } else {
+    dates = [nurseDayOnOrAfter(adminDate)];
+  }
+  const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let html = '';
+  for(const date of dates){
+    const wd = date.getDay();
+    const dateStr = fmtDateStr(date);
+    const entries = (await loadDay(dateStr, 'infermiera')).slice().sort((a,b)=>a.start-b.start);
+    const [ws, we] = NURSE_HOURS[wd];
+    const title = capFirst(date.toLocaleDateString('it-IT',{weekday:'long', day:'numeric', month:'long', year:'numeric'}));
+    let rows = '';
+    entries.forEach(e => {
+      const what = e.type==='patient' ? 'Vaccinazione' : 'Appuntamento';
+      rows += `<tr><td>${fmtTime(e.start)}–${fmtTime(e.start+e.duration)}</td><td>${esc(e.name||'')}</td><td>${what}</td><td>${esc(e.phone||'')}</td></tr>`;
+    });
+    if(!rows) rows = '<tr><td colspan="4" style="text-align:center;color:#666;">Nessun appuntamento</td></tr>';
+    html += `<div class="print-day"><h2>Ambulatorio infermiera — ${esc(title)}</h2>
+      <div class="print-sub">Dott. Nicola Pezzucchi Taraborelli · orario ${fmtTime(ws)}–${fmtTime(we)} · ${entries.length} appuntament${entries.length===1?'o':'i'}</div>
+      <table><thead><tr><th>Orario</th><th>Nome</th><th>Tipo</th><th>Telefono</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  let area = document.getElementById('printArea');
+  if(!area){ area = document.createElement('div'); area.id = 'printArea'; document.body.appendChild(area); }
+  area.innerHTML = html;
+  window.print();
 }
 
 function onNurseSlotClick(dateStr, t){
@@ -1803,6 +1853,7 @@ window.confirmStaffBooking = confirmStaffBooking;
 window.openNurseBooking = openNurseBooking;
 window.confirmNurseBooking = confirmNurseBooking;
 window.setAdminCalendar = setAdminCalendar;
+window.printNurseDay = printNurseDay;
 window.openBlockForm = openBlockForm;
 window.confirmBlock = confirmBlock;
 window.openMultiBlockModal = openMultiBlockModal;
