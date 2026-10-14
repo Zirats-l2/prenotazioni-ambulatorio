@@ -1314,6 +1314,23 @@ async function saveVaccineDone(dateStr, raw){
 function isVaccineEntry(e){
   return e.type!=='block' && (e.type==='patient' || String(e.name||'').startsWith('Vaccinazione'));
 }
+// Conta tutte le vaccinazioni prenotate dal giorno indicato fino alla fine di gennaio (STOCK_COUNT_UNTIL)
+const STOCK_COUNT_UNTIL = '2027-01-31';
+async function countVaccinesBooked(fromDateStr){
+  let count = 0, offset = 0;
+  try{
+    for(;;){
+      const url = `${SUPABASE_URL}/rest/v1/bookings?calendar=eq.infermiera&date=gte.${fromDateStr}&date=lte.${STOCK_COUNT_UNTIL}&select=type,name&order=date.asc,start.asc&limit=1000&offset=${offset}`;
+      const res = await fetch(url, { headers: sbHeaders() });
+      if(!res.ok) break;
+      const rows = await res.json();
+      count += rows.filter(isVaccineEntry).length;
+      if(rows.length < 1000) break;
+      offset += 1000;
+    }
+  }catch(e){ console.error('Errore conteggio vaccinazioni prenotate', e); }
+  return count;
+}
 async function renderVaccineStock(){
   const box = document.getElementById('vaccineStockBox');
   if(!box) return;
@@ -1321,7 +1338,7 @@ async function renderVaccineStock(){
   if(!vaccineStockLoaded) await loadVaccineStock();
   const date = nurseDayOnOrAfter(adminDate);
   const dateStr = fmtDateStr(date);
-  const booked = (await loadDay(dateStr, 'infermiera')).filter(isVaccineEntry).length;
+  const booked = await countVaccinesBooked(dateStr);
   const total = vaccineStock.total;
   const done = (vaccineStock.done[dateStr]===undefined) ? null : vaccineStock.done[dateStr];
   const fmtLeft = v => {
@@ -1339,7 +1356,7 @@ async function renderVaccineStock(){
     <label class="vs-row"><span>Vaccinazioni fatte nella giornata (da inserire a fine turno)</span>
       <input type="number" min="0" inputmode="numeric" value="${done===null?'':done}" placeholder="–" onchange="saveVaccineDone('${dateStr}', this.value)"></label>
     <div class="vs-row"><span>Dosi realmente rimaste</span>${fmtLeft(done)}</div>
-    <div class="vs-row"><span>Dosi rimaste in base alle prenotazioni (${booked})</span>${fmtLeft(booked)}</div>
+    <div class="vs-row"><span>Dosi rimaste in base a tutte le prenotazioni da questo giorno a fine gennaio (${booked} prenotate)</span>${fmtLeft(booked)}</div>
   `;
 }
 
