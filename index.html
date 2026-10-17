@@ -422,6 +422,7 @@ const NURSE_SERVICES = [
   {id:'lavaggio', label:'Lavaggio auricolare', duration:10},
 ];
 const VACCINE_SERVICE = NURSE_SERVICES[0];
+const VACCINE_PATIENT_STEP = 10; // minuti tra uno slot prenotabile dai pazienti e il successivo
 
 // Primi 15 minuti riservati automaticamente ogni settimana (non richiede azione manuale)
 const RECURRING_BLOCKS = {
@@ -2052,7 +2053,8 @@ function renderVaccineDay(container, dateStr, wd, dateObj, entries){
   const dur = VACCINE_SERVICE.duration;
   const today = fmtDateStr(todayNormalized());
   let any = false;
-  for(let t=start; t<end; t+=dur){
+  // Ai pazienti si mostra uno slot ogni 10 minuti (la vaccinazione dura 5 minuti): i 5 minuti in mezzo restano liberi per la segreteria
+  for(let t=start; t+dur<=end; t+=VACCINE_PATIENT_STEP){
     const occupied = entries.some(e => overlaps(t, dur, e.start, e.duration));
     const isPast = (dateStr < today) || (dateStr===today && t <= nowMinutes());
     const div = document.createElement('div');
