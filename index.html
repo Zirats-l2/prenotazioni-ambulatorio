@@ -317,6 +317,10 @@
   .vs-row span{flex:1;line-height:1.25;}
   .vs-row input{width:70px;padding:5px 6px;font-size:14px;text-align:right;border:1px solid #C9A0B8;border-radius:6px;}
   .vs-row b{font-size:16px;}
+
+  .now-line{position:absolute;left:0;right:0;height:0;border-top:2px solid #16A34A;z-index:20;pointer-events:none;}
+  .now-line span{position:absolute;left:2px;top:-10px;background:#16A34A;color:#fff;font-size:10.5px;font-weight:700;line-height:1;padding:3px 5px;border-radius:4px;}
+  .nurse-slots,.doc-slots{position:relative;}
 </style>
 </head>
 <body>
@@ -1003,11 +1007,12 @@ async function renderNurseGrid(container, dates){
     const dLabel = c.date.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'});
     colsHtml += `<div class="nurse-col">
       <div class="nurse-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel} · ore ${fmtTime(ws)}–${fmtTime(we)}</span></div>
-      <div class="nurse-slots">${rowsHtml}${entriesHtml}</div>
+      <div class="nurse-slots">${rowsHtml}${entriesHtml}${nowLineHtml(c.dateStr, ws, we, NURSE_ROW_H/NURSE_SLOT)}</div>
     </div>`;
   });
 
   setAdminContent(container, `<div class="nurse-cols cal-infermiera${cols.length===1?' single':''}">${colsHtml}</div>`);
+  updateNowLines();
 }
 
 
@@ -1065,6 +1070,26 @@ const DOCTOR_WINDOWS = {
 };
 const DOC_SLOT = 15;                     // minuti per slot
 const DOC_ROW_H = DOC_SLOT * PX_PER_MIN; // altezza in pixel di uno slot da 15 minuti
+
+/* ---- linea verde dell'ora attuale nei calendari (si sposta da sola ogni 30 secondi) ---- */
+function nowLineHtml(dateStr, ws, we, pxPerMin){
+  return `<div class="now-line" data-date="${dateStr}" data-ws="${ws}" data-we="${we}" data-ppm="${pxPerMin}" style="display:none;"><span></span></div>`;
+}
+function updateNowLines(){
+  const lines = document.querySelectorAll('.now-line');
+  if(!lines.length) return;
+  const now = new Date();
+  const todayStr = fmtDateStr(now);
+  const m = now.getHours()*60 + now.getMinutes() + now.getSeconds()/60;
+  lines.forEach(el => {
+    const ws = +el.dataset.ws, we = +el.dataset.we, ppm = +el.dataset.ppm;
+    if(el.dataset.date !== todayStr || m < ws || m > we){ el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.style.top = ((m-ws)*ppm) + 'px';
+    el.firstChild.textContent = fmtTime(Math.floor(m));
+  });
+}
+setInterval(updateNowLines, 30000);
 
 async function renderDoctorGrid(container, dates){
   const cols = [];
@@ -1130,11 +1155,12 @@ async function renderDoctorGrid(container, dates){
     const openLabel = open ? ` · apertura ${fmtTime(open[0])}–${fmtTime(open[1])}` : '';
     colsHtml += `<div class="doc-col">
       <div class="doc-col-head">${DAY_NAMES[c.wd]}${isToday?' · Oggi':''}<br><span style="font-weight:400;">${dLabel}${openLabel}</span></div>
-      <div class="doc-slots">${rowsHtml}${entriesHtml}</div>
+      <div class="doc-slots">${rowsHtml}${entriesHtml}${nowLineHtml(c.dateStr, ws, we, PX_PER_MIN)}</div>
     </div>`;
   });
 
   setAdminContent(container, `<div class="doc-cols cal-medico${cols.length===1?' single':''}">${colsHtml}</div>`);
+  updateNowLines();
 }
 
 function onDoctorSlotClick(dateStr, wd, t){
