@@ -132,8 +132,7 @@
   .slot.free:hover{border-color:var(--free);box-shadow:0 2px 8px rgba(21,162,74,.3);transform:translateY(-1px);}
   .slot.busy{background:var(--busy-bg);color:#A32318;border-color:rgba(226,59,46,.45);}
   .slot.block{background:var(--block-bg);color:#8A5A08;border-color:rgba(217,130,11,.4);}
-  .slot.pharma-free-slot{background:#D6ECFB;color:#0B4C7A;cursor:pointer;border-color:rgba(11,108,168,.4);}
-  .slot.pharma-free-slot:hover{border-color:#1D78B5;box-shadow:0 2px 8px rgba(11,108,168,.25);transform:translateY(-1px);}
+  .slot.pharma-free-slot{background:#D6ECFB;color:#0B4C7A;cursor:default;border-color:rgba(11,108,168,.4);}
   .slot.pharma-busy-slot{background:#0B3C63;color:#fff;border-color:#062845;}
   .slot.pharma-busy-slot .who{color:#fff;opacity:.85;}
   .slot .t{font-weight:600;}
@@ -859,8 +858,8 @@ function renderPharmaSlot(container, dateStr, wd, dateObj, entries){
     div.innerHTML = `<span class="t">${fmtTime(b.start)} – ${fmtTime(b.start+b.duration)}</span><span class="who">Informatore farmaceutico — ${isPast && !occupied ? 'Non più prenotabile' : 'Occupato'}</span>`;
   } else {
     div.className = 'slot pharma-free-slot';
-    div.innerHTML = `<span class="t">${fmtTime(b.start)} – ${fmtTime(b.start+b.duration)}</span><span class="who">Informatore farmaceutico — Libero, tocca per prenotare</span>`;
-    div.onclick = () => openPharmaBooking(dateStr, b.start, b.duration, dateObj);
+    div.innerHTML = `<span class="t">${fmtTime(b.start)} – ${fmtTime(b.start+b.duration)}</span><span class="who">Informatore farmaceutico — Riservato, non prenotabile online</span>`;
+    // Non prenotabile dal pubblico: gli appuntamenti degli informatori li inserisce la segreteria dall'area riservata
   }
   container.insertBefore(div, container.firstChild);
 }
@@ -885,6 +884,7 @@ function openPharmaBooking(dateStr, start, duration, dateObj){
   renderCaptcha('phCaptcha');
 }
 async function confirmPharmaBooking(dateStr, start, duration){
+  return; // prenotazione pubblica disattivata: solo la segreteria inserisce gli informatori
   const nome = document.getElementById('phNome').value.trim();
   const tel = document.getElementById('phTel').value.trim();
   const email = document.getElementById('phEmail').value.trim();
